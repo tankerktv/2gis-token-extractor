@@ -198,7 +198,7 @@ choosing paths, exit codes — lives in modules with no heavy dependencies, and
 Playwright stays a thin wrapper around them.
 
 The suite is verified by mutation: break a rule on purpose, and a test must go
-red. All fourteen mutations tried so far were caught.
+red. All sixteen mutations tried so far were caught.
 
 ## License
 

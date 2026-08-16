@@ -37,7 +37,7 @@ from .errors import (
     TokenNotFound,
 )
 from .state import harden, prepare_parent
-from .tokens import TokenCollector
+from .tokens import Found, TokenCollector
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,14 @@ DEFAULT_URL = "https://2gis.ru/"
 
 DEFAULT_TIMEOUT = 60.0
 LOGIN_TIMEOUT = 600.0
+
+#: Сколько ждать источник понадёжнее после первой находки.
+#:
+#: Перехватчик на странице срабатывает на доли секунды раньше события
+#: websocket, и без этой отсрочки возвращался бы он — а он же может ухватить
+#: посторонний sha1. Пауза короткая: на живой странице события приходят
+#: подряд.
+GRACE = 2.0
 
 #: Запасной перехватчик на самой странице.
 #:
@@ -123,19 +131,38 @@ def _attach(page, collector: TokenCollector) -> None:
     page.on("request", on_request)
 
 
+def enough(found: Found | None, waited: float, grace: float = GRACE) -> bool:
+    """Хватит ли найденного или стоит подождать источник понадёжнее.
+
+    Адрес сокета сомнений не вызывает — с ним останавливаемся сразу. Всё
+    остальное держим ``grace`` секунд: за это время обычно приезжает тот самый
+    ``user/ws``, и он вытеснит случайную находку.
+    """
+    if found is None:
+        return False
+    if found.source == "websocket":
+        return True
+    return waited >= grace
+
+
 async def _wait_for_token(page, collector: TokenCollector, timeout: float) -> Capture | None:
     """Ждёт токен до истечения срока, попутно заглядывая в перехватчик на странице."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if collector.found:
-            break
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    first_found_at: float | None = None
+
+    while loop.time() < deadline:
         try:
             collector.offer_text(await page.evaluate("window.__2gisToken"))
         except Exception:
             # страницу могли перезагрузить прямо сейчас — попробуем в следующий раз
             pass
-        if collector.found:
+
+        if collector.found and first_found_at is None:
+            first_found_at = loop.time()
+        if enough(collector.found, loop.time() - (first_found_at or loop.time())):
             break
+
         await asyncio.sleep(0.25)
 
     found = collector.found
