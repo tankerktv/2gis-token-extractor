@@ -1,0 +1,52 @@
+# Гоняется на зеркале. Программа обещает работать на трёх системах, значит и
+# проверяться должна на трёх — расхождения в путях и кодировках вылезают
+# именно там.
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Линтер
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src tests tools
+
+  tests:
+    name: Тесты (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # Playwright намеренно не ставим: тесты не поднимают браузер.
+      - run: pip install pytest
+      - run: python -m pytest -q
+
+  package:
+    name: Пакет собирается
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      # Версия в пакете обязана совпадать с версией в коде — иначе pipx
+      # поставит одно, а --version покажет другое.
+      - run: ls -l dist/

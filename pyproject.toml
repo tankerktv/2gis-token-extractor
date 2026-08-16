@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "2gis-token-extractor"
+dynamic = ["version"]
+description = "Prints a fresh 2GIS access token to stdout"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dmitry Kotov" }]
+keywords = ["2gis", "token", "credentials", "playwright"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities",
+]
+# Единственная зависимость. Проверка токена сделана на стандартной библиотеке
+# нарочно: ради одного GET тащить httpx незачем, а чем меньше зависимостей,
+# тем меньше весит однофайловая сборка.
+dependencies = ["playwright>=1.40"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.6"]
+
+[project.scripts]
+"2gis-token" = "twogis_token.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tankerktv/2gis-token-extractor"
+Changelog = "https://github.com/tankerktv/2gis-token-extractor/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "twogis_token.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

@@ -1,0 +1,34 @@
+# Сессия браузера — это фактически доступ к аккаунту.
+storage_state.json
+*storage_state*.json
+
+# Секреты и наблюдения живут только здесь.
+data/
+
+# Токены в любом виде.
+token.json
+token.txt
+*.token
+
+# Дампы трафика.
+*.har
+
+# Рабочие записи. Здесь адреса внутренней инфраструктуры и подробности
+# разведки — в публичном репозитории им не место, а истории у него одна
+# на оба зеркала.
+*brief*.md
+notes/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+*.spec
+
+# Локальные настройки Claude Code
+.claude/settings.local.json

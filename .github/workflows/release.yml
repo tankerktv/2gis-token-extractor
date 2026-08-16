@@ -1,0 +1,133 @@
+# Создаёт GitHub Release, когда приезжает тег vX.Y.Z, и прикладывает к нему
+# однофайловые сборки под три системы — для тех, у кого нет Python.
+#
+# Почему на стороне GitHub, а не в GitLab CI: здесь есть встроенный токен и
+# раннеры всех трёх систем. Свой раннер для этого держать не нужно.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "тег, который выпускаем"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  check:
+    name: Версия и CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest -q
+      # Ловит две ошибки, которые иначе видны уже после публикации: версия в
+      # коде разошлась с тегом и в CHANGELOG нет раздела под эту версию.
+      - run: python tools/check_release.py "$TAG"
+
+  build:
+    name: Сборка (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: 2gis-token-linux-x86_64.tar.gz
+          - os: macos-latest
+            asset: 2gis-token-macos-arm64.tar.gz
+          - os: windows-latest
+            asset: 2gis-token-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyinstaller playwright
+
+      # --collect-all playwright обязателен: без него в сборку не попадёт
+      # драйвер, и программа упадёт при первом же запуске браузера.
+      - name: Собрать однофайловую сборку
+        shell: bash
+        run: >
+          pyinstaller --onefile --name 2gis-token
+          --collect-all playwright
+          --paths src
+          packaging/pyinstaller_entry.py
+
+      # Браузер в сборку не кладём — он весит сотни мегабайт и обновляется
+      # отдельно от программы. Пользователь скачивает его один раз командой
+      # `2gis-token install-browser`.
+      - name: Проверить, что сборка запускается
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./dist/2gis-token.exe --version
+          else
+            ./dist/2gis-token --version
+          fi
+
+      # Права на исполнение через артефакты GitHub не переживают, поэтому
+      # unix-сборки упаковываем в tar.gz, а .exe уходит как есть.
+      - name: Упаковать
+        shell: bash
+        run: |
+          mkdir -p upload
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/2gis-token.exe "upload/${{ matrix.asset }}"
+          else
+            chmod +x dist/2gis-token
+            tar -czf "upload/${{ matrix.asset }}" -C dist 2gis-token
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: upload/${{ matrix.asset }}
+
+  release:
+    name: Выпуск
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Собрать описание из CHANGELOG
+        run: python3 tools/changelog_section.py "$TAG" > /tmp/notes.md
+
+      - name: Создать или обновить релиз
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Описание берём из CHANGELOG.md, а не из --generate-notes: список
+          # коммитов человеку читать неудобно.
+          #
+          # Тег может приехать повторно — например, когда его пересоздают
+          # после сбоя раннера. Тогда релиз уже существует, и `create` упал бы.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "релиз $TAG уже есть — обновляю"
+            gh release edit "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          fi
+          # --clobber: повторный прогон заменяет файлы, а не падает на том,
+          # что имя занято.
+          gh release upload "$TAG" assets/* --clobber
