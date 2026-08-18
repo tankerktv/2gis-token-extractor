@@ -14,7 +14,23 @@
 # и покрасит прогон.
 #
 # Переменные проекта (Settings -> CI/CD -> Variables):
-#   GITHUB_TOKEN — fine-grained PAT, Contents: read/write на репозиторий-зеркало.
+#   GITHUB_TOKEN — fine-grained PAT на репозиторий-зеркало. Прав нужно ДВА:
+#                  Contents: read/write и Workflows: read/write.
+#
+#                  Второе забывается легко, а стоит дорого: мы публикуем
+#                  каталог .github/workflows/, и правка файлов workflow
+#                  закрыта отдельным правом. Без него GitHub отвергает push
+#                  ЦЕЛИКОМ, а не частично:
+#
+#                    ! [remote rejected] ... -> main (refusing to allow a
+#                    Personal Access Token to create or update workflow
+#                    `.github/workflows/release.yml` without `workflow` scope)
+#
+#                  Формулировка про scope — язык классических токенов;
+#                  у fine-grained это право называется Workflows. Права
+#                  правятся у существующего токена, значение не меняется,
+#                  поэтому переменную здесь после исправления трогать не надо.
+#
 #                  Masked, без Protect (иначе не виден прогонам на тегах).
 #   GITHUB_REPO  — необязательна, по умолчанию берётся значение ниже.
 #
