@@ -37,6 +37,21 @@ jobs:
       - run: pip install pytest
       - run: python -m pytest -q
 
+  browser:
+    name: Обвязка браузера
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest playwright
+      # Единственное место, где браузер нужен по-настоящему: тесты гоняют
+      # настоящий Chromium по подставной странице 2ГИС, лежащей рядом с ними.
+      # Ни аккаунта, ни сети для этого не требуется.
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -m browser -q
+
   package:
     name: Пакет собирается
     runs-on: ubuntu-latest

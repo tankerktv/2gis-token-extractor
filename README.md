@@ -88,6 +88,7 @@ curl "https://api.auth.2gis.com/2.1/users/me?access_token=$(2gis-token get)"
 | `--out FILE` | writes the token to a file; stdout stays empty |
 | `--timeout SEC` | how long to wait for the token (default 60) |
 | `--headed` | shows the browser window — for when something is off |
+| `--profile NAME` | use a named session — see [Several accounts](#several-accounts) |
 
 ### `check` — is the token still good?
 
@@ -118,6 +119,7 @@ Meant for scripts:
 | 2 | you need to sign in: no session, or it expired |
 | 3 | environment is not ready: no Playwright or no browser |
 | 4 | network unavailable |
+| 5 | session busy: another run is using it right now |
 
 ## About the token
 
@@ -125,11 +127,20 @@ Measured, not assumed:
 
 * **40 characters, `0-9` and `a-f` only.** An opaque string — **not a JWT**.
   No dots, no base64, nothing to decode; the expiry date is not written inside.
-* It shows up in the URL of the WebSocket the 2GIS web app opens:
+* It rides in the query string of the requests the web app makes — including
+  the WebSocket it opens for the friends feature:
 
   ```
   wss://zond.api.2gis.ru/api/1.1/user/ws?appVersion=6.31.0&channels=markers,sharing,routes&token=<40 hex>
   ```
+
+  The socket is the documented place to look for it by hand, but it is not the
+  only one. In every run observed on a live account the socket never opened at
+  all, and the token arrived in an ordinary request instead. Both are watched.
+
+* **Every run mints a new one, and the old ones keep working.** Measured: take
+  a token, take another, and the first still answers. So there is no need to
+  share one token between several programs — give each its own.
 
 * **How long it lives is not known.** A token issued on 2026-07-26 still worked
   on 2026-08-16 — so at least three weeks. The upper bound has not been found,
@@ -149,6 +160,14 @@ protocol and outlives that.
 Three nets, from reliable to backup: Playwright's `websocket` event, its
 `request` event (URLs and headers), and — as a fallback — `WebSocket` and
 `fetch` replaced by a script on the page.
+
+**A headless browser has to stop announcing itself.** Playwright introduces
+itself as `HeadlessChrome`, and with that name 2GIS serves a page that makes
+fifteen requests and stops: no map, no sign-in, no token. Put a plain `Chrome`
+there and the count goes past a hundred and the app comes alive. The program
+therefore asks the browser for its own string and fixes one word in it —
+inventing a version would drift away from the real browser at the next
+Playwright update.
 
 Candidates are ranked by where they came from. Forty hex characters are also
 exactly what a sha1 looks like, and a map page is full of those: image
@@ -171,6 +190,33 @@ Override it with `--state PATH` or the `TWOGIS_TOKEN_STATE` environment
 variable. On Unix the file is written with `600` permissions.
 
 Deleting the file means signing in again — nothing else breaks.
+
+The file is replaced, never edited in place: a new one is written beside it and
+moved over the old one, so a crash halfway through cannot leave you with half a
+session. Two runs cannot share one session either — the second is turned away
+with exit code 5, because 2GIS refreshes the cookies on every visit and the
+loser of that race would overwrite fresh cookies with stale ones.
+
+## Several accounts
+
+A personal account and a work one are two different sessions. Name them:
+
+```bash
+2gis-token login --profile work
+2gis-token get --profile work
+```
+
+Profiles live under `profiles/<name>/storage_state.json` inside the same config
+directory, so nothing has to be remembered but the name. `TWOGIS_TOKEN_PROFILE`
+sets one for a whole shell; a `--profile` on the command line always wins over
+it, so a variable left in a shell profile cannot silently send work to the
+wrong account.
+
+```bash
+2gis-token profiles
+```
+
+lists the ones that have been signed in.
 
 ## When the session expires
 
@@ -197,8 +243,17 @@ recognising a token, parsing the socket URL, reading the profile response,
 choosing paths, exit codes — lives in modules with no heavy dependencies, and
 Playwright stays a thin wrapper around them.
 
+The browser plumbing — the part no unit test can reach — is covered separately,
+by driving a real Chromium against a fake 2GIS page that ships with the tests.
+Those need a downloaded browser, so they are kept out of the default run:
+
+```bash
+python -m playwright install chromium
+python -m pytest -m browser
+```
+
 The suite is verified by mutation: break a rule on purpose, and a test must go
-red. All sixteen mutations tried so far were caught.
+red. All twenty-four mutations tried so far were caught.
 
 ## License
 

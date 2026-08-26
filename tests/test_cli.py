@@ -29,7 +29,7 @@ def сессия(tmp_path, monkeypatch):
 
 @pytest.fixture
 def браузер_отдаёт_токен(monkeypatch):
-    async def fake_capture(state_path, *, url, timeout, headless):
+    async def fake_capture(state_path, *, url, timeout, headless, profile=None):
         return browser.Capture(TOKEN, "websocket")
 
     monkeypatch.setattr(browser, "capture_token", fake_capture)
@@ -75,7 +75,7 @@ class TestGet:
         assert "login" in captured.err
 
     def test_сессия_истекла(self, сессия, monkeypatch, capsys):
-        async def fake_capture(state_path, *, url, timeout, headless):
+        async def fake_capture(state_path, *, url, timeout, headless, profile=None):
             raise browser.SessionExpired("токен не появился — войди заново: 2gis-token login")
 
         monkeypatch.setattr(browser, "capture_token", fake_capture)
@@ -183,3 +183,45 @@ class TestРазборАргументов:
         with pytest.raises(SystemExit) as exit_info:
             cli.main(["--version"])
         assert exit_info.value.code == 0
+
+
+class TestПрофили:
+    def test_профиль_уводит_сессию_в_свой_каталог(self, браузер_отдаёт_токен, capsys):
+        assert cli.main(["get", "--profile", "работа", "--json"]) == EXIT_OK
+        payload = json.loads(capsys.readouterr().out)
+        assert "profiles" in payload["state"]
+        assert "работа" in payload["state"]
+
+    def test_профиль_важнее_переменной_окружения(self, сессия, браузер_отдаёт_токен, capsys):
+        """Фикстура выставила TWOGIS_TOKEN_STATE — ключ команды должен победить."""
+        assert cli.main(["get", "--profile", "работа", "--json"]) == EXIT_OK
+        payload = json.loads(capsys.readouterr().out)
+        assert "работа" in payload["state"]
+        assert str(сессия) != payload["state"]
+
+    def test_негодное_имя_не_уводит_запись_из_каталога(self, браузер_отдаёт_токен, capsys):
+        assert cli.main(["get", "--profile", "../побег"]) == EXIT_TOKEN
+        assert "имя профиля" in capsys.readouterr().err
+
+    def test_список_пуст(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "known_profiles", lambda: [])
+        assert cli.main(["profiles"]) == EXIT_OK
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "нет" in captured.err
+
+    def test_список_по_строке_на_профиль(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "known_profiles", lambda: ["личный", "работа"])
+        assert cli.main(["profiles"]) == EXIT_OK
+        assert capsys.readouterr().out.split() == ["личный", "работа"]
+
+    def test_список_машиночитаемо(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "known_profiles", lambda: ["работа"])
+        assert cli.main(["profiles", "--json"]) == EXIT_OK
+        assert json.loads(capsys.readouterr().out) == ["работа"]
+
+    def test_подсказка_зовёт_войти_в_тот_же_профиль(self, capsys):
+        """Совет без --profile увёл бы человека в другую сессию."""
+        assert cli.main(["get", "--profile", "несуществующий"]) == EXIT_AUTH
+        ошибка = capsys.readouterr().err
+        assert "login --profile несуществующий" in ошибка

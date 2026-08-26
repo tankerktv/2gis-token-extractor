@@ -2,8 +2,8 @@
 
 Токен снимается **перехватом сетевой активности страницы**, а не выковыриванием
 из внутреннего состояния приложения. Это принципиально: внутреннее устройство
-фронтенда 2ГИС меняется когда угодно, а адрес сокета с токеном в параметре —
-это их протокол, он живёт дольше.
+фронтенда 2ГИС меняется когда угодно, а токен в параметре запроса — это их
+протокол, он живёт дольше.
 
 Ловим тремя сетями, от надёжной к запасной:
 
@@ -12,9 +12,27 @@
 3. Подмена ``WebSocket`` и ``fetch`` скриптом на странице — на случай, если
    что-то пройдёт мимо первых двух.
 
-Первые два способа работают на уровне протокола и не зависят от того, что
-страница делает со своими объектами; третий остался от предыдущего подхода и
-стоит дёшево, поэтому пусть будет.
+Замечено при первой же проверке на живом аккаунте: токен приезжает не только
+сокетом. В наблюдавшемся заходе сокет не открывался вовсе, а токен нашёлся в
+параметре обычного запроса. Поэтому вторая сеть — не запасная роскошь, а
+рабочий путь.
+
+Два наблюдения, оплаченных временем; оба не очевидны и оба легко потерять
+при переписывании.
+
+**Headless выдаёт себя строкой User-Agent, и 2ГИС ему приложение не отдаёт.**
+Playwright по умолчанию представляется как ``HeadlessChrome/124...``. С такой
+строкой страница делает пятнадцать запросов и замирает: ни карты, ни
+авторизации, ни токена. Стоит подставить обычный ``Chrome`` — и запросов
+становится под сотню, приложение живёт. Поэтому UA берётся у самого браузера
+и чинится заменой одного слова: подставлять выдуманную версию нельзя, она
+разойдётся с настоящей при первом же обновлении Playwright.
+
+**Куки обновляются при визите, и не сохранить их — значит потерять сессию.**
+Раньше состояние записывалось только при удаче. Один заход без сохранения — и
+на диске оставались прежние куки, а вход приходилось повторять, хотя он был
+совсем свежий. Теперь состояние пишется всегда, в ``finally``: даже когда
+токен не пойман, обновлённые куки уезжают на диск.
 
 Авторизацию программа не реализует и реализовывать не собирается: вход по
 телефону и SMS защищён капчей и проверками устройства, а повторять это в коде —
@@ -36,12 +54,12 @@ from .errors import (
     SessionMissing,
     TokenNotFound,
 )
-from .state import harden, prepare_parent
+from .state import SessionLock, commit_state, prepare_parent, temp_state_path
 from .tokens import Found, TokenCollector
 
 log = logging.getLogger(__name__)
 
-#: Страница, на которой открывается сокет с токеном.
+#: Страница, на которой приложение 2ГИС запрашивает токен.
 DEFAULT_URL = "https://2gis.ru/"
 
 DEFAULT_TIMEOUT = 60.0
@@ -51,9 +69,14 @@ LOGIN_TIMEOUT = 600.0
 #:
 #: Перехватчик на странице срабатывает на доли секунды раньше события
 #: websocket, и без этой отсрочки возвращался бы он — а он же может ухватить
-#: посторонний sha1. Пауза короткая: на живой странице события приходят
-#: подряд.
+#: посторонний sha1. Пауза короткая: на живой странице события идут подряд.
 GRACE = 2.0
+
+#: Ниже этого числа запросов приложение считается незапустившимся.
+#:
+#: Замерено: не запустившаяся страница делает 14-15 запросов, живая — около
+#: сотни. Порог посередине, к точному числу не привязываемся.
+BOOT_REQUESTS = 40
 
 #: Запасной перехватчик на самой странице.
 #:
@@ -94,6 +117,19 @@ class Capture:
     source: str
 
 
+class Traffic:
+    """Сколько запросов увидела страница.
+
+    Нужен ровно для одного: отличить «приложение не запустилось» от
+    «запустилось, но токена не дало». Лечится это по-разному, и сваливать оба
+    случая в одно сообщение — значит гнать человека логиниться заново там,
+    где вход ни при чём.
+    """
+
+    def __init__(self) -> None:
+        self.requests = 0
+
+
 def _import_playwright():
     try:
         from playwright.async_api import async_playwright
@@ -117,11 +153,36 @@ def _launch_failure(error: Exception) -> Exception:
     return error
 
 
-def _attach(page, collector: TokenCollector) -> None:
+def honest_user_agent(user_agent: str | None) -> str | None:
+    """Убирает из строки браузера признание в том, что он без окна.
+
+    Подменяется одно слово, всё остальное — настоящее: версия, платформа,
+    порядок частей. Выдуманная строка разошлась бы с настоящим браузером и
+    была бы заметнее, чем исходная. ``None`` означает «чинить нечего».
+    """
+    if not user_agent or "Headless" not in user_agent:
+        return None
+    return user_agent.replace("HeadlessChrome", "Chrome").replace("Headless", "")
+
+
+async def _browser_user_agent(browser) -> str | None:
+    """Спрашивает у браузера его строку и чинит её, если он headless."""
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        return honest_user_agent(await page.evaluate("navigator.userAgent"))
+    except Exception:  # pragma: no cover — не повод падать, останемся как есть
+        return None
+    finally:
+        await context.close()
+
+
+def _attach(page, collector: TokenCollector, traffic: Traffic) -> None:
     """Подписывается на сетевые события страницы."""
     page.on("websocket", lambda ws: collector.offer_websocket_url(ws.url))
 
     def on_request(request) -> None:
+        traffic.requests += 1
         collector.offer_request_url(request.url)
         try:
             collector.offer_headers(request.headers)
@@ -135,7 +196,7 @@ def enough(found: Found | None, waited: float, grace: float = GRACE) -> bool:
     """Хватит ли найденного или стоит подождать источник понадёжнее.
 
     Адрес сокета сомнений не вызывает — с ним останавливаемся сразу. Всё
-    остальное держим ``grace`` секунд: за это время обычно приезжает тот самый
+    остальное держим ``grace`` секунд: за это время может приехать тот самый
     ``user/ws``, и он вытеснит случайную находку.
     """
     if found is None:
@@ -143,6 +204,32 @@ def enough(found: Found | None, waited: float, grace: float = GRACE) -> bool:
     if found.source == "websocket":
         return True
     return waited >= grace
+
+
+def login_command(profile: str | None = None) -> str:
+    """Команда входа, которую стоит посоветовать именно этому человеку.
+
+    Без профиля совет ``2gis-token login`` верен, а с профилем — уже нет:
+    выполнив его, человек войдёт в другую сессию и снова получит тот же
+    отказ. Подсказка должна быть исполнимой как есть.
+    """
+    return "2gis-token login" + (f" --profile {profile}" if profile else "")
+
+
+def diagnose(requests: int, timeout: float, profile: str | None = None) -> str:
+    """Объясняет, почему токена нет, — по тому, ожила ли страница вообще."""
+    if requests < BOOT_REQUESTS:
+        return (
+            f"страница почти не загрузилась: {requests} запросов за {timeout:.0f} с.\n"
+            "Приложение 2ГИС не запустилось, до токена дело не дошло.\n"
+            "Проверь доступ к 2gis.ru и попробуй с окном:\n"
+            "  2gis-token get --headed"
+        )
+    return (
+        f"приложение загрузилось ({requests} запросов), но токена в его запросах нет.\n"
+        "Чаще всего это значит, что сессия истекла — войди заново:\n"
+        f"  {login_command(profile)}"
+    )
 
 
 async def _wait_for_token(page, collector: TokenCollector, timeout: float) -> Capture | None:
@@ -169,48 +256,67 @@ async def _wait_for_token(page, collector: TokenCollector, timeout: float) -> Ca
     return Capture(found.token, found.source) if found else None
 
 
+async def _save_state(context, state_path: Path) -> None:
+    """Записывает куки на диск. Вызывается всегда, даже когда токен не пойман.
+
+    2ГИС обновляет куки при визите. Если не сохранить обновлённые, на диске
+    останутся прежние — и следующий заход придёт с устаревшей сессией.
+    """
+    temp = temp_state_path(state_path)
+    try:
+        prepare_parent(state_path)
+        await context.storage_state(path=str(temp))
+        commit_state(temp, state_path)
+    except Exception as error:  # pragma: no cover — диск или закрытый контекст
+        log.warning("не удалось сохранить сессию в %s: %s", state_path, error)
+        try:
+            temp.unlink()
+        except OSError:
+            pass
+
+
 async def capture_token(
     state_path: Path,
     *,
     url: str = DEFAULT_URL,
     timeout: float = DEFAULT_TIMEOUT,
     headless: bool = True,
+    profile: str | None = None,
 ) -> Capture:
     """Заходит на 2ГИС с сохранённой сессией и забирает токен."""
     if not state_path.exists():
         raise SessionMissing(
             f"нет сохранённой сессии ({state_path}).\n"
-            "Войди один раз:  2gis-token login"
+            f"Войди один раз:  {login_command(profile)}"
         )
 
     async_playwright = _import_playwright()
     collector = TokenCollector()
+    traffic = Traffic()
 
-    async with async_playwright() as pw:
+    async with SessionLock(state_path), async_playwright() as pw:
         try:
             browser = await pw.chromium.launch(headless=headless)
         except Exception as error:  # pragma: no cover — зависит от окружения
             raise _launch_failure(error) from error
-        context = await browser.new_context(storage_state=str(state_path))
+
+        user_agent = await _browser_user_agent(browser) if headless else None
+        context = await browser.new_context(
+            storage_state=str(state_path),
+            **({"user_agent": user_agent} if user_agent else {}),
+        )
         try:
             page = await context.new_page()
-            _attach(page, collector)
+            _attach(page, collector, traffic)
             await page.add_init_script(f"({HOOK_JS})()")
             await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
             capture = await _wait_for_token(page, collector, timeout)
             if capture is None:
-                raise SessionExpired(
-                    f"токен не появился за {timeout:.0f} с.\n"
-                    "Чаще всего это значит, что сессия истекла — войди заново:\n"
-                    "  2gis-token login"
-                )
-            # Куки могли обновиться за время визита — сохраняем, чтобы сессия
-            # жила дольше и следующий запуск не упёрся в протухшие.
-            await context.storage_state(path=str(state_path))
-            harden(state_path)
+                raise SessionExpired(diagnose(traffic.requests, timeout, profile))
             log.info("токен получен из источника %s", capture.source)
             return capture
         finally:
+            await _save_state(context, state_path)
             await context.close()
             await browser.close()
 
@@ -234,9 +340,10 @@ async def interactive_login(
     say = on_message or (lambda message: None)
     async_playwright = _import_playwright()
     collector = TokenCollector()
+    traffic = Traffic()
     prepare_parent(state_path)
 
-    async with async_playwright() as pw:
+    async with SessionLock(state_path), async_playwright() as pw:
         try:
             browser = await pw.chromium.launch(headless=False)
         except Exception as error:  # pragma: no cover — зависит от окружения
@@ -246,7 +353,7 @@ async def interactive_login(
         )
         try:
             page = await context.new_page()
-            _attach(page, collector)
+            _attach(page, collector, traffic)
             await page.add_init_script(f"({HOOK_JS})()")
             await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
             say("Открылось окно браузера. Войди в свой аккаунт 2ГИС.")
@@ -259,12 +366,10 @@ async def interactive_login(
                     "Если вход выполнен, а окно не закрылось — обнови страницу 2gis.ru\n"
                     "в открытом окне: токен приезжает вместе с загрузкой карты."
                 )
-
-            await context.storage_state(path=str(state_path))
-            harden(state_path)
             say(f"Сессия сохранена: {state_path}")
             return capture
         finally:
+            await _save_state(context, state_path)
             await context.close()
             await browser.close()
 

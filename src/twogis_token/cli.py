@@ -1,4 +1,4 @@
-"""Команды программы: login, get, check.
+"""Команды программы: login, get, check, profiles.
 
 Договорённости про вывод, ради которых всё и затевалось:
 
@@ -8,6 +8,9 @@
   не мешает;
 * токен не пишется ни в файлы, ни в логи, пока об этом не попросили ключом
   ``--out``; в сообщениях вместо токена стоит его отпечаток.
+
+Справка (``--help``) — на английском: README у проекта тоже английский,
+а команда попадает на глаза первой.
 
 Печать идёт через ``sys.stdout.buffer`` в UTF-8 явно. Обычный ``print`` берёт
 кодировку из окружения, и на машине с кириллической консолью падает на первом
@@ -25,10 +28,41 @@ from pathlib import Path
 
 from . import __version__, auth_api, browser
 from .errors import EXIT_AUTH, EXIT_NETWORK, EXIT_OK, EXIT_TOKEN, TokenExtractorError
-from .state import ENV_STATE, harden, prepare_parent, resolve_state_path
+from .state import (
+    ENV_PROFILE,
+    ENV_STATE,
+    harden,
+    known_profiles,
+    prepare_parent,
+    resolve_state_path,
+)
 from .tokens import fingerprint, is_token
 
 PROGRAM = "2gis-token"
+
+EPILOG = """\
+examples:
+  2gis-token login                    sign in once, in a real browser window
+  2gis-token get                      print a fresh token
+  2gis-token check                    ask 2GIS whether the token still works
+  2gis-token get --out token.txt      write it to a file instead of stdout
+  2gis-token login --profile work     keep a second account separate
+
+  export ZOND_TOKEN="$(2gis-token get)"
+
+exit codes:
+  0  success
+  1  token not found, or not accepted by 2GIS
+  2  sign-in required: no session, or it expired
+  3  environment not ready: no Playwright, or no browser for it
+  4  network unavailable
+  5  session busy: another run is using it right now
+
+The token goes to stdout and nowhere else. It reaches a file only when you ask
+for one with --out, and it never appears in logs: messages carry a fingerprint
+instead. Your phone number and the SMS code are typed into a real browser and
+never pass through this program.
+"""
 
 
 # --- вывод ------------------------------------------------------------------
@@ -54,93 +88,125 @@ def err(text: str) -> None:
 # --- разбор аргументов ------------------------------------------------------
 
 
-def _add_common(parser: argparse.ArgumentParser) -> None:
+def _add_session(parser: argparse.ArgumentParser) -> None:
+    """Ключи, выбирающие сессию. Общие для всех команд, которые её трогают."""
     parser.add_argument(
         "--state",
-        metavar="ФАЙЛ",
-        help=f"файл сессии браузера (по умолчанию — каталог настроек, ${ENV_STATE})",
+        metavar="FILE",
+        help=f"session file to use (default: config directory, ${ENV_STATE})",
     )
+    parser.add_argument(
+        "--profile",
+        metavar="NAME",
+        help=f"named session, kept apart from the others (${ENV_PROFILE})",
+    )
+
+
+def _add_common(parser: argparse.ArgumentParser) -> None:
+    _add_session(parser)
     parser.add_argument(
         "--url",
         default=browser.DEFAULT_URL,
-        help="страница, на которой ловится токен (по умолчанию %(default)s)",
+        help="page to catch the token on (default: %(default)s)",
     )
-    parser.add_argument("--json", action="store_true", help="подробности машиночитаемо")
-    parser.add_argument("-v", "--verbose", action="store_true", help="ход дела в stderr")
+    parser.add_argument("--json", action="store_true", help="machine-readable details")
+    parser.add_argument("-v", "--verbose", action="store_true", help="progress to stderr")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROGRAM,
-        description="Выдаёт токен доступа к 2ГИС.",
-        epilog="Токен печатается в stdout. Что делать с ним дальше — решает вызывающий.",
+        description="Print a fresh 2GIS access token to stdout.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"{PROGRAM} {__version__}")
-    commands = parser.add_subparsers(dest="command", required=True, metavar="КОМАНДА")
+    commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     login = commands.add_parser(
         "login",
-        help="открыть браузер и войти в аккаунт (один раз)",
-        description="Открывает окно браузера. Телефон и код из SMS вводишь ты, "
-        "программа их не видит — на диск ложатся только куки.",
+        help="sign in once, in a real browser window",
+        description=(
+            "Opens a browser window on 2gis.ru. You type the phone number and the "
+            "code from the SMS yourself; the program never sees either. Only the "
+            "browser cookies are stored, in the config directory. The window "
+            "closes by itself once the session is ready."
+        ),
     )
     _add_common(login)
     login.add_argument(
         "--timeout",
         type=float,
         default=browser.LOGIN_TIMEOUT,
-        metavar="СЕК",
-        help="сколько ждать входа (по умолчанию %(default)s)",
+        metavar="SEC",
+        help="how long to wait for you to sign in (default: %(default)s)",
     )
 
     get = commands.add_parser(
         "get",
-        help="напечатать свежий токен",
-        description="Заходит на 2ГИС с сохранённой сессией и печатает токен в stdout.",
+        help="print a fresh token",
+        description=(
+            "Loads 2GIS in a headless browser with the saved session and prints "
+            "the token: one line, nothing else, so it drops straight into a "
+            "pipeline. Every run yields a new token; the old ones keep working."
+        ),
     )
     _add_common(get)
     get.add_argument(
         "--timeout",
         type=float,
         default=browser.DEFAULT_TIMEOUT,
-        metavar="СЕК",
-        help="сколько ждать токен (по умолчанию %(default)s)",
+        metavar="SEC",
+        help="how long to wait for the token (default: %(default)s)",
     )
     get.add_argument(
         "--out",
-        metavar="ФАЙЛ",
-        help="записать токен в файл вместо печати в stdout",
+        metavar="FILE",
+        help="write the token to this file; stdout stays empty",
     )
     get.add_argument(
         "--headed",
         action="store_true",
-        help="показать окно браузера (для разбирательств)",
+        help="show the browser window, for troubleshooting",
     )
 
     check = commands.add_parser(
         "check",
-        help="жив ли токен",
-        description="Спрашивает у api.auth.2gis.com, действует ли токен. "
-        "Без --token берёт свежий токен из сохранённой сессии.",
+        help="check whether a token is still alive",
+        description=(
+            "Asks api.auth.2gis.com for the account profile. Without --token it "
+            "takes a fresh token from the saved session, which answers a "
+            "different question: whether the session still works."
+        ),
     )
     _add_common(check)
     check.add_argument(
         "--timeout",
         type=float,
         default=browser.DEFAULT_TIMEOUT,
-        metavar="СЕК",
-        help="сколько ждать токен из браузера (по умолчанию %(default)s)",
+        metavar="SEC",
+        help="how long to wait for a token from the browser (default: %(default)s)",
     )
     check.add_argument(
         "--token",
-        metavar="ТОКЕН",
-        help="проверить этот токен; '-' — прочитать из stdin",
+        metavar="TOKEN",
+        help="check this token instead; '-' reads it from stdin",
     )
+
+    profiles = commands.add_parser(
+        "profiles",
+        help="list saved profiles",
+        description="Lists the named sessions that have been signed in.",
+    )
+    profiles.add_argument("--json", action="store_true", help="machine-readable details")
 
     commands.add_parser(
         "install-browser",
-        help="скачать браузер для Playwright",
-        description="Скачивает Chromium. Нужно один раз, и только если браузера ещё нет.",
+        help="download the browser Playwright needs",
+        description=(
+            "Downloads Chromium. Needed once, and only if Playwright has no "
+            "browser yet — for instance when you took a single-file build."
+        ),
     )
 
     return parser
@@ -150,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _state_path(args) -> Path:
-    return resolve_state_path(getattr(args, "state", None))
+    return resolve_state_path(getattr(args, "state", None), getattr(args, "profile", None))
 
 
 def _acquire(args) -> browser.Capture:
@@ -161,6 +227,7 @@ def _acquire(args) -> browser.Capture:
             url=args.url,
             timeout=args.timeout,
             headless=not getattr(args, "headed", False),
+            profile=getattr(args, "profile", None),
         )
     )
 
@@ -174,7 +241,7 @@ def cmd_login(args) -> int:
         out(json.dumps({"state": str(state), "fingerprint": fingerprint(capture.token)}))
     else:
         err(f"Готово: {fingerprint(capture.token)}")
-        err(f"Дальше:  {PROGRAM} get")
+        err(f"Дальше:  {PROGRAM} get" + (f" --profile {args.profile}" if args.profile else ""))
     return EXIT_OK
 
 
@@ -269,6 +336,20 @@ def cmd_check(args) -> int:
     return _check_exit_code(result)
 
 
+def cmd_profiles(args) -> int:
+    names = known_profiles()
+    if args.json:
+        out(json.dumps(names, ensure_ascii=False))
+        return EXIT_OK
+    if not names:
+        err("сохранённых профилей нет")
+        err(f"завести:  {PROGRAM} login --profile ИМЯ")
+        return EXIT_OK
+    for name in names:
+        out(name)
+    return EXIT_OK
+
+
 def cmd_install_browser(args) -> int:
     return browser.install_browser()
 
@@ -277,6 +358,7 @@ COMMANDS = {
     "login": cmd_login,
     "get": cmd_get,
     "check": cmd_check,
+    "profiles": cmd_profiles,
     "install-browser": cmd_install_browser,
 }
 
