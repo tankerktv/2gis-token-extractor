@@ -114,17 +114,17 @@ class TestFingerprint:
         assert fingerprint(TOKEN) == fingerprint(TOKEN)
 
     def test_пусто(self):
-        assert fingerprint("") == "<пусто>"
-        assert fingerprint(None) == "<пусто>"
+        assert fingerprint("") == "<empty>"
+        assert fingerprint(None) == "<empty>"
 
     def test_посторонняя_строка_помечается(self):
-        assert "строка" in fingerprint("не токен вовсе")
+        assert "string" in fingerprint("не токен вовсе")
 
 
 def test_redact_убирает_токен_из_текста():
     text = redact(f"открыт сокет {WS_URL}")
     assert TOKEN not in text
-    assert "<ТОКЕН>" in text
+    assert "<TOKEN>" in text
 
 
 class TestCollector:

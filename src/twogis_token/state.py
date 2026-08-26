@@ -93,9 +93,9 @@ def normalize_profile(name: str) -> str:
     cleaned = (name or "").strip()
     if not cleaned or cleaned in {".", ".."} or set(cleaned) & FORBIDDEN_IN_PROFILE:
         raise TokenExtractorError(
-            f"негодное имя профиля: {name!r}\n"
-            "Имя становится именем каталога — нельзя пустое, '.', '..' "
-            "и знаки / \\ : * ? \" < > |"
+            f"bad profile name: {name!r}\n"
+            "The name becomes a directory name, so it cannot be empty, '.', '..' "
+            "or contain / \\ : * ? \" < > |"
         )
     return cleaned
 
@@ -229,9 +229,9 @@ class SessionLock:
             except FileExistsError:
                 if attempt == 2 or not self._steal_if_stale():
                     raise SessionBusy(
-                        f"с этой сессией уже работает другой заход ({self._path}).\n"
-                        "Подожди, пока он закончится. Если процесс давно умер,\n"
-                        "удали файл замка."
+                        f"another run is already using this session ({self._path}).\n"
+                        "Wait for it to finish. If that process is long gone,\n"
+                        "delete the lock file."
                     ) from None
                 continue
             os.write(handle, str(os.getpid()).encode("ascii"))

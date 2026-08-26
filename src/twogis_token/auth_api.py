@@ -82,13 +82,13 @@ def parse_users_me(status: int, body: str) -> CheckResult:
         except ValueError:
             return CheckResult(
                 alive=False,
-                detail="сервер ответил 200, но тело не похоже на JSON — 2ГИС что-то поменял",
+                detail="HTTP 200, but the body is not JSON — 2GIS changed something",
                 status=status,
             )
         name = account_name(payload)
         return CheckResult(
             alive=True,
-            detail=f"жив, аккаунт {name}" if name else "жив",
+            detail=f"alive, account {name}" if name else "alive",
             status=status,
             account=name,
         )
@@ -97,8 +97,8 @@ def parse_users_me(status: int, body: str) -> CheckResult:
         return CheckResult(
             alive=False,
             detail=(
-                f"токен не принят (HTTP {status}) — сессия истекла, "
-                "войди заново: 2gis-token login"
+                f"token rejected (HTTP {status}) — the session has expired, "
+                "sign in again: 2gis-token login"
             ),
             status=status,
             expired=True,
@@ -107,13 +107,13 @@ def parse_users_me(status: int, body: str) -> CheckResult:
     if 500 <= status < 600:
         return CheckResult(
             alive=False,
-            detail=f"2ГИС отвечает ошибкой (HTTP {status}) — это на их стороне, токен трогать рано",
+            detail=f"2GIS is failing (HTTP {status}) — their side; the token is not the problem",
             status=status,
         )
 
     return CheckResult(
         alive=False,
-        detail=f"неожиданный ответ HTTP {status}",
+        detail=f"unexpected response, HTTP {status}",
         status=status,
     )
 
@@ -140,7 +140,7 @@ def check_token(
     ответы всё равно разбирает ``parse_users_me``.
     """
     if not token:
-        return CheckResult(alive=False, detail="токен пуст")
+        return CheckResult(alive=False, detail="the token is empty")
 
     url = f"{USERS_ME_URL}?{urllib.parse.urlencode({'access_token': token})}"
     call = fetch or _urlopen_fetch
@@ -149,13 +149,13 @@ def check_token(
     except urllib.error.URLError as error:
         return CheckResult(
             alive=False,
-            detail=f"сеть недоступна: {error.reason}",
+            detail=f"network unavailable: {error.reason}",
             reachable=False,
         )
     except OSError as error:
         return CheckResult(
             alive=False,
-            detail=f"сеть недоступна: {error}",
+            detail=f"network unavailable: {error}",
             reachable=False,
         )
     return parse_users_me(status, body)

@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
-"""Наблюдение за сроком жизни токена 2ГИС.
+"""Watch how long a 2GIS token actually lives.
 
-Вопрос «сколько живёт токен» из одного замера не решается — нужна история.
-Известно только, что токен от 2026-07-26 работал 2026-08-16, то есть живёт
-не меньше трёх недель. Верхняя граница не установлена, и от неё зависит,
-нужна ли вообще автоматика: если токен живёт полгода, входить раз в полгода
-руками — нормально.
+One measurement cannot answer that question — it takes a history. All that is
+known so far: a token issued on 2026-07-26 still worked on 2026-08-16, so it
+lives at least three weeks. The upper bound is unknown, and it decides whether
+any refresh machinery is worth building at all.
 
-    # разовая проверка (для cron или Планировщика задач)
-    python tools/token_watch.py --once
-
-    # непрерывно, раз в 6 часов
+    python tools/token_watch.py --once      # one check, for cron or Task Scheduler
     python tools/token_watch.py --interval 6
-
-    # что накопилось
     python tools/token_watch.py --report
 
-Токен берётся из ``data/token.json`` (``{"token": "..."}``) либо из stdin.
-Каталог ``data/`` в .gitignore — секретам в репозитории не место.
+The token is read from data/token.json ({"token": "..."}) or from stdin.
+data/ is in .gitignore — secrets do not belong in the repository.
 
-Важная оговорка про толкование: если у 2ГИС срок скользящий и продлевается
-активностью, то программа, постоянно ходящая с этим токеном, будет держать
-его живым сколь угодно долго. Наблюдение при работающем потребителе и без
-него — это два разных опыта, и путать их результаты нельзя.
+One caveat about reading the results: if the lifetime slides forward on use,
+a program that keeps talking to 2GIS will keep its token alive indefinitely,
+and the token will only die during idleness. Watching with an active consumer
+and without one are two different experiments; their results cannot be mixed.
 """
 
 from __future__ import annotations
@@ -49,9 +43,9 @@ def load_token(from_stdin: bool) -> str:
         return sys.stdin.read().strip()
     if not TOKEN_FILE.exists():
         raise SystemExit(
-            f"Нет {TOKEN_FILE}.\n"
+            f"No {TOKEN_FILE}.\n"
             f"  2gis-token get --out {TOKEN_FILE.parent / 'token.txt'}\n"
-            "либо положи туда JSON вида {\"token\": \"...\"}"
+            'or put a JSON file there: {"token": "..."}'
         )
     text = TOKEN_FILE.read_text(encoding="utf-8").strip()
     if text.startswith("{"):
@@ -76,7 +70,7 @@ def check(token: str) -> dict:
 
 def report() -> int:
     if not LOG_FILE.exists():
-        print("История пуста — запусти хотя бы одну проверку.")
+        print("No history yet — run at least one check.")
         return 1
 
     records = [
@@ -85,7 +79,7 @@ def report() -> int:
         if line.strip()
     ]
     if not records:
-        print("История пуста.")
+        print("No history yet.")
         return 1
 
     def moment(record: dict) -> datetime:
@@ -96,27 +90,27 @@ def report() -> int:
     alive = [r for r in records if r["alive"]]
     dead = [r for r in records if not r["alive"] and r.get("reachable", True)]
 
-    print(f"проверок:        {len(records)}")
-    print(f"первая:          {first.astimezone().isoformat(timespec='minutes')}")
-    print(f"последняя:       {last.astimezone().isoformat(timespec='minutes')}")
-    print(f"окно наблюдения: {(last - first).total_seconds() / 86400:.1f} суток")
+    print(f"checks:          {len(records)}")
+    print(f"first:           {first.astimezone().isoformat(timespec='minutes')}")
+    print(f"last:            {last.astimezone().isoformat(timespec='minutes')}")
+    print(f"observed window: {(last - first).total_seconds() / 86400:.1f} days")
 
     if alive:
         last_alive = moment(alive[-1])
-        print(f"последний раз жив: {last_alive.astimezone().isoformat(timespec='minutes')}")
+        print(f"last seen alive: {last_alive.astimezone().isoformat(timespec='minutes')}")
         print(
-            "подтверждённое время жизни: не менее "
-            f"{(last_alive - first).total_seconds() / 86400:.1f} суток"
+            "confirmed lifetime: at least "
+            f"{(last_alive - first).total_seconds() / 86400:.1f} days"
         )
     if dead:
         first_dead = moment(dead[0])
-        print(f"\nПЕРВЫЙ ОТКАЗ: {first_dead.astimezone().isoformat(timespec='minutes')}")
-        print(f"  причина: {dead[0]['detail']}")
+        print(f"\nFIRST REJECTION: {first_dead.astimezone().isoformat(timespec='minutes')}")
+        print(f"  reason: {dead[0]['detail']}")
         if alive:
             gap = (first_dead - moment(alive[-1])).total_seconds() / 3600
-            print(f"  умер в промежутке шириной {gap:.1f} ч после последней удачной проверки")
+            print(f"  died within a {gap:.1f} h window after the last good check")
     else:
-        print("\nотказов не было — токен всё ещё жив")
+        print("\nno rejections yet — the token is still alive")
     return 0
 
 
@@ -124,10 +118,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--once", action="store_true", help="одна проверка и выход")
-    parser.add_argument("--interval", type=float, default=6.0, help="часы между проверками")
-    parser.add_argument("--report", action="store_true", help="показать накопленное")
-    parser.add_argument("--stdin", action="store_true", help="взять токен из stdin")
+    parser.add_argument("--once", action="store_true", help="one check, then exit")
+    parser.add_argument("--interval", type=float, default=6.0, help="hours between checks")
+    parser.add_argument("--report", action="store_true", help="show what has piled up")
+    parser.add_argument("--stdin", action="store_true", help="read the token from stdin")
     args = parser.parse_args()
 
     if args.report:
@@ -135,14 +129,16 @@ def main() -> int:
 
     token = load_token(args.stdin)
     if not is_token(token):
-        raise SystemExit("это не похоже на токен 2ГИС: ожидается 40 знаков 0-9 и a-f")
+        raise SystemExit(
+            "that does not look like a 2GIS token: expected 40 characters, 0-9 and a-f"
+        )
 
     while True:
         record = check(token)
-        status = "жив" if record["alive"] else "МЁРТВ"
+        status = "alive" if record["alive"] else "DEAD"
         print(f"{record['ts']}  {status}  {record['detail']}", flush=True)
         if not record["alive"] and record["reachable"]:
-            print("\nТокен перестал приниматься — запусти --report и посмотри окно.")
+            print("\nThe token stopped being accepted — run --report and look at the window.")
             return 1
         if args.once:
             return 0

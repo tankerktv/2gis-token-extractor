@@ -26,7 +26,7 @@ class TestParseUsersMe:
         result = parse_users_me(200, json.dumps({"anything": True}))
         assert result.alive
         assert result.account is None
-        assert result.detail == "жив"
+        assert result.detail == "alive"
 
     def test_двести_но_не_json(self):
         result = parse_users_me(200, "<html>сюрприз</html>")

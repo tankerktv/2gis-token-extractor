@@ -37,12 +37,16 @@ logs — messages show a fingerprint instead.
 **With [pipx](https://pipx.pypa.io/)** (recommended):
 
 ```bash
-pipx install 2gis-token-extractor
+pipx install git+https://github.com/tankerktv/2gis-token-extractor.git
 2gis-token install-browser
 ```
 
 `install-browser` downloads Chromium for Playwright. It is a one-time step of
 roughly 150 MB.
+
+It is not on PyPI: this is a small tool, and everyone who installs it arrives
+from this repository anyway. Installing straight from git needs `git` on your
+machine and gives you exactly the same `2gis-token` command.
 
 **Without Python:** grab a single-file build for your system from
 [Releases](https://github.com/tankerktv/2gis-token-extractor/releases), put it

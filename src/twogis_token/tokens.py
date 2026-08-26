@@ -112,15 +112,15 @@ def fingerprint(token: str | None) -> str:
     никогда. Отпечатка хватает, чтобы понять, тот же это токен или новый.
     """
     if not token:
-        return "<пусто>"
+        return "<empty>"
     digest = hashlib.sha1(token.encode("utf-8")).hexdigest()[:8]
-    kind = "токен" if is_token(token) else f"строка len={len(token)}"
+    kind = "token" if is_token(token) else f"string len={len(token)}"
     return f"<{kind} sha1={digest}>"
 
 
 def redact(text: str) -> str:
     """Заменяет все токены в тексте заглушкой — для логов и сообщений об ошибках."""
-    return TOKEN_IN_TEXT.sub("<ТОКЕН>", text)
+    return TOKEN_IN_TEXT.sub("<TOKEN>", text)
 
 
 @dataclass(frozen=True)

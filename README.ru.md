@@ -36,12 +36,16 @@ DevTools и скопировать руками из адреса веб-сок�
 **Через [pipx](https://pipx.pypa.io/)** — основной способ:
 
 ```bash
-pipx install 2gis-token-extractor
+pipx install git+https://github.com/tankerktv/2gis-token-extractor.git
 2gis-token install-browser
 ```
 
 `install-browser` скачивает Chromium для Playwright. Это разовое действие,
 примерно 150 МБ.
+
+В PyPI программы нет: она маленькая, и приходят за ней всё равно из этого
+репозитория. Установка прямо из git требует, чтобы на машине был `git`, и даёт
+ровно ту же команду `2gis-token`.
 
 **Без Python:** возьми однофайловую сборку под свою систему в
 [релизах](https://github.com/tankerktv/2gis-token-extractor/releases), положи

@@ -73,7 +73,7 @@ class TestОбъяснениеНеудачи:
     def test_страница_не_ожила(self):
         """Пятнадцать запросов — приложение не запустилось, вход ни при чём."""
         text = diagnose(15, timeout=60)
-        assert "не загрузилась" in text
+        assert "barely loaded" in text
         assert "--headed" in text
         assert "login" not in text
 
@@ -87,7 +87,7 @@ class TestОбъяснениеНеудачи:
         assert "15" in diagnose(15, timeout=60)
 
     def test_граница(self):
-        assert "не загрузилась" in diagnose(BOOT_REQUESTS - 1, timeout=60)
+        assert "barely loaded" in diagnose(BOOT_REQUESTS - 1, timeout=60)
         assert "login" in diagnose(BOOT_REQUESTS, timeout=60)
 
 

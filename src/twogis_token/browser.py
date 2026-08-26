@@ -135,7 +135,7 @@ def _import_playwright():
         from playwright.async_api import async_playwright
     except ImportError as error:  # pragma: no cover — зависит от окружения
         raise PlaywrightMissing(
-            "не установлен Playwright.\n"
+            "Playwright is not installed.\n"
             "  pip install playwright\n"
             "  2gis-token install-browser"
         ) from error
@@ -147,7 +147,7 @@ def _launch_failure(error: Exception) -> Exception:
     text = str(error)
     if "Executable doesn't exist" in text or "playwright install" in text:
         return BrowserMissing(
-            "Playwright есть, а браузера у него нет. Скачать:\n"
+            "Playwright is installed, but it has no browser yet. Download one:\n"
             "  2gis-token install-browser"
         )
     return error
@@ -220,14 +220,14 @@ def diagnose(requests: int, timeout: float, profile: str | None = None) -> str:
     """Объясняет, почему токена нет, — по тому, ожила ли страница вообще."""
     if requests < BOOT_REQUESTS:
         return (
-            f"страница почти не загрузилась: {requests} запросов за {timeout:.0f} с.\n"
-            "Приложение 2ГИС не запустилось, до токена дело не дошло.\n"
-            "Проверь доступ к 2gis.ru и попробуй с окном:\n"
+            f"the page barely loaded: {requests} requests in {timeout:.0f} s.\n"
+            "The 2GIS app never started, so there was no token to catch.\n"
+            "Check that 2gis.ru is reachable, then try it with a window:\n"
             "  2gis-token get --headed"
         )
     return (
-        f"приложение загрузилось ({requests} запросов), но токена в его запросах нет.\n"
-        "Чаще всего это значит, что сессия истекла — войди заново:\n"
+        f"the app loaded ({requests} requests), but none of them carried a token.\n"
+        "That usually means the session has expired — sign in again:\n"
         f"  {login_command(profile)}"
     )
 
@@ -268,7 +268,7 @@ async def _save_state(context, state_path: Path) -> None:
         await context.storage_state(path=str(temp))
         commit_state(temp, state_path)
     except Exception as error:  # pragma: no cover — диск или закрытый контекст
-        log.warning("не удалось сохранить сессию в %s: %s", state_path, error)
+        log.warning("could not save the session to %s: %s", state_path, error)
         try:
             temp.unlink()
         except OSError:
@@ -286,8 +286,8 @@ async def capture_token(
     """Заходит на 2ГИС с сохранённой сессией и забирает токен."""
     if not state_path.exists():
         raise SessionMissing(
-            f"нет сохранённой сессии ({state_path}).\n"
-            f"Войди один раз:  {login_command(profile)}"
+            f"no saved session ({state_path}).\n"
+            f"Sign in once:  {login_command(profile)}"
         )
 
     async_playwright = _import_playwright()
@@ -313,7 +313,7 @@ async def capture_token(
             capture = await _wait_for_token(page, collector, timeout)
             if capture is None:
                 raise SessionExpired(diagnose(traffic.requests, timeout, profile))
-            log.info("токен получен из источника %s", capture.source)
+            log.info("token captured from %s", capture.source)
             return capture
         finally:
             await _save_state(context, state_path)
@@ -356,17 +356,17 @@ async def interactive_login(
             _attach(page, collector, traffic)
             await page.add_init_script(f"({HOOK_JS})()")
             await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-            say("Открылось окно браузера. Войди в свой аккаунт 2ГИС.")
-            say("Окно закроется само, как только сессия будет готова.")
+            say("A browser window is open. Sign in to your 2GIS account.")
+            say("It will close by itself once the session is ready.")
 
             capture = await _wait_for_token(page, collector, timeout)
             if capture is None:
                 raise TokenNotFound(
-                    f"за {timeout / 60:.0f} мин токен так и не появился.\n"
-                    "Если вход выполнен, а окно не закрылось — обнови страницу 2gis.ru\n"
-                    "в открытом окне: токен приезжает вместе с загрузкой карты."
+                    f"no token appeared in {timeout / 60:.0f} min.\n"
+                    "If you did sign in and the window is still open, reload 2gis.ru\n"
+                    "there: the token arrives together with the map."
                 )
-            say(f"Сессия сохранена: {state_path}")
+            say(f"Session saved: {state_path}")
             return capture
         finally:
             await _save_state(context, state_path)

@@ -240,8 +240,8 @@ def cmd_login(args) -> int:
     if args.json:
         out(json.dumps({"state": str(state), "fingerprint": fingerprint(capture.token)}))
     else:
-        err(f"Готово: {fingerprint(capture.token)}")
-        err(f"Дальше:  {PROGRAM} get" + (f" --profile {args.profile}" if args.profile else ""))
+        err(f"Done: {fingerprint(capture.token)}")
+        err(f"Next:  {PROGRAM} get" + (f" --profile {args.profile}" if args.profile else ""))
     return EXIT_OK
 
 
@@ -254,7 +254,7 @@ def cmd_get(args) -> int:
         prepare_parent(path)
         path.write_text(capture.token + "\n", encoding="utf-8")
         harden(path)
-        err(f"Токен записан в {path}")
+        err(f"Token written to {path}")
         if args.json:
             out(
                 json.dumps(
@@ -304,13 +304,13 @@ def _check_exit_code(result: auth_api.CheckResult) -> int:
 
 def cmd_check(args) -> int:
     token = _token_argument(args)
-    source = "аргумент"
+    source = "argument"
     if token is None:
         capture = _acquire(args)
         token, source = capture.token, capture.source
     elif not is_token(token):
         raise TokenExtractorError(
-            "это не похоже на токен 2ГИС: ожидается 40 знаков 0-9 и a-f"
+            "that does not look like a 2GIS token: expected 40 characters, 0-9 and a-f"
         )
 
     result = auth_api.check_token(token)
@@ -342,8 +342,8 @@ def cmd_profiles(args) -> int:
         out(json.dumps(names, ensure_ascii=False))
         return EXIT_OK
     if not names:
-        err("сохранённых профилей нет")
-        err(f"завести:  {PROGRAM} login --profile ИМЯ")
+        err("no saved profiles")
+        err(f"create one:  {PROGRAM} login --profile NAME")
         return EXIT_OK
     for name in names:
         out(name)
@@ -381,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
         err(f"{PROGRAM}: {error}")
         return error.exit_code
     except KeyboardInterrupt:  # pragma: no cover — интерактивное прерывание
-        err("прервано")
+        err("interrupted")
         return 130
 
 

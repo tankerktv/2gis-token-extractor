@@ -132,7 +132,7 @@ class TestCheck:
 
         monkeypatch.setattr(auth_api, "check_token", нельзя)
         assert cli.main(["check", "--token", "не токен"]) == EXIT_TOKEN
-        assert "40 знаков" in capsys.readouterr().err
+        assert "40 characters" in capsys.readouterr().err
 
     def test_токен_из_stdin(self, monkeypatch, capsys):
         import io
@@ -201,14 +201,14 @@ class TestПрофили:
 
     def test_негодное_имя_не_уводит_запись_из_каталога(self, браузер_отдаёт_токен, capsys):
         assert cli.main(["get", "--profile", "../побег"]) == EXIT_TOKEN
-        assert "имя профиля" in capsys.readouterr().err
+        assert "bad profile name" in capsys.readouterr().err
 
     def test_список_пуст(self, monkeypatch, capsys):
         monkeypatch.setattr(cli, "known_profiles", lambda: [])
         assert cli.main(["profiles"]) == EXIT_OK
         captured = capsys.readouterr()
         assert captured.out == ""
-        assert "нет" in captured.err
+        assert "no saved profiles" in captured.err
 
     def test_список_по_строке_на_профиль(self, monkeypatch, capsys):
         monkeypatch.setattr(cli, "known_profiles", lambda: ["личный", "работа"])
