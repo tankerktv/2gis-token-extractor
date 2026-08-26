@@ -29,6 +29,9 @@ pytestmark = pytest.mark.browser
 
 TOKEN = "0123456789abcdef0123456789abcdef01234567"
 PAGE = (Path(__file__).parent / "pages" / "fake_2gis.html").resolve().as_uri()
+PAGE_SECOND_TRY = (
+    (Path(__file__).parent / "pages" / "fake_2gis_second_try.html").resolve().as_uri()
+)
 
 
 @pytest.fixture
@@ -67,6 +70,22 @@ def test_сессия_сохраняется_даже_когда_токена_н
 
     # файл на месте и остался разбираемым, а не обрубком
     assert json.loads(сессия.read_text(encoding="utf-8")) is not None
+
+
+def test_вторая_попытка_спасает(сессия):
+    """Страница отдаёт токен только после перезагрузки.
+
+    Если программа сдастся после первой попытки, тест покраснеет — снаружи
+    перезагрузку иначе не увидеть.
+    """
+    capture = asyncio.run(browser.capture_token(сессия, url=PAGE_SECOND_TRY, timeout=40))
+    assert capture.token == TOKEN
+
+
+def test_одной_попытки_на_такой_странице_не_хватает(сессия):
+    """Обратная сторона: при коротком сроке попытка одна, и токена не будет."""
+    with pytest.raises(SessionExpired):
+        asyncio.run(browser.capture_token(сессия, url=PAGE_SECOND_TRY, timeout=8))
 
 
 def test_замок_не_пускает_второй_заход(сессия):

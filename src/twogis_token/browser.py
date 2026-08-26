@@ -28,6 +28,12 @@ Playwright по умолчанию представляется как ``Headles
 и чинится заменой одного слова: подставлять выдуманную версию нельзя, она
 разойдётся с настоящей при первом же обновлении Playwright.
 
+**Одной попытки мало.** Токен приезжает вместе с загрузкой приложения, а оно
+иногда не доезжает. Поэтому ``get`` не сдаётся сразу: страница перезагружается
+и ждёт снова. Отпущенный срок при этом делится между попытками, а не
+удваивается — ``--timeout`` остаётся полным бюджетом, на который можно
+рассчитывать в расписании.
+
 **Куки обновляются при визите, и не сохранить их — значит потерять сессию.**
 Раньше состояние записывалось только при удаче. Один заход без сохранения — и
 на диске оставались прежние куки, а вход приходилось повторять, хотя он был
@@ -77,6 +83,12 @@ GRACE = 2.0
 #: Замерено: не запустившаяся страница делает 14-15 запросов, живая — около
 #: сотни. Порог посередине, к точному числу не привязываемся.
 BOOT_REQUESTS = 40
+
+#: Сколько раз пробовать. Вторая попытка — просто перезагрузка страницы.
+ATTEMPTS = 2
+
+#: Короче этого срока попытка бессмысленна: приложению нужно успеть завестись.
+MIN_ATTEMPT = 15.0
 
 #: Запасной перехватчик на самой странице.
 #:
@@ -216,6 +228,30 @@ def login_command(profile: str | None = None) -> str:
     return "2gis-token login" + (f" --profile {profile}" if profile else "")
 
 
+def plan_attempts(
+    timeout: float,
+    attempts: int = ATTEMPTS,
+    minimum: float = MIN_ATTEMPT,
+) -> list[float]:
+    """Делит отпущенный срок между попытками.
+
+    Токен приезжает вместе с загрузкой приложения, и приложение иногда не
+    доезжает: то ответ подвис, то скрипт не выполнился. Перезагрузка страницы
+    стоит секунду и часто спасает — сдаваться после одной попытки жалко.
+
+    Срок при этом **делится, а не добавляется**: ``--timeout`` остаётся полным
+    бюджетом. Иначе ключ означал бы одно при удаче и вдвое больше при неудаче,
+    а на него полагаются скрипты и расписания.
+
+    Делить имеет смысл, только если каждой попытке достаётся осмысленный срок.
+    При ``--timeout 10`` две попытки по пять секунд хуже одной десятисекундной:
+    не успеет ни та, ни другая.
+    """
+    if attempts < 2 or timeout / attempts < minimum:
+        return [timeout]
+    return [timeout / attempts] * attempts
+
+
 def diagnose(requests: int, timeout: float, profile: str | None = None) -> str:
     """Объясняет, почему токена нет, — по тому, ожила ли страница вообще."""
     if requests < BOOT_REQUESTS:
@@ -309,12 +345,21 @@ async def capture_token(
             page = await context.new_page()
             _attach(page, collector, traffic)
             await page.add_init_script(f"({HOOK_JS})()")
-            await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-            capture = await _wait_for_token(page, collector, timeout)
-            if capture is None:
-                raise SessionExpired(diagnose(traffic.requests, timeout, profile))
-            log.info("token captured from %s", capture.source)
-            return capture
+
+            budgets = plan_attempts(timeout)
+            for number, budget in enumerate(budgets, start=1):
+                if number == 1:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=budget * 1000)
+                else:
+                    log.info("no token yet, reloading (attempt %d of %d)", number, len(budgets))
+                    await page.reload(wait_until="domcontentloaded", timeout=budget * 1000)
+
+                capture = await _wait_for_token(page, collector, budget)
+                if capture is not None:
+                    log.info("token captured from %s", capture.source)
+                    return capture
+
+            raise SessionExpired(diagnose(traffic.requests, timeout, profile))
         finally:
             await _save_state(context, state_path)
             await context.close()

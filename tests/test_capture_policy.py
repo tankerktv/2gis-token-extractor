@@ -13,12 +13,15 @@
 from __future__ import annotations
 
 from twogis_token.browser import (
+    ATTEMPTS,
     BOOT_REQUESTS,
     GRACE,
+    MIN_ATTEMPT,
     diagnose,
     enough,
     honest_user_agent,
     login_command,
+    plan_attempts,
 )
 from twogis_token.tokens import Found
 
@@ -89,6 +92,35 @@ class TestОбъяснениеНеудачи:
     def test_граница(self):
         assert "barely loaded" in diagnose(BOOT_REQUESTS - 1, timeout=60)
         assert "login" in diagnose(BOOT_REQUESTS, timeout=60)
+
+
+class TestДелениеСрока:
+    """Вторая попытка — перезагрузка страницы. Она не должна стоить лишнего времени."""
+
+    def test_срок_делится_а_не_добавляется(self):
+        """Иначе --timeout значил бы одно при удаче и вдвое больше при неудаче."""
+        assert sum(plan_attempts(60)) == 60
+
+    def test_попыток_столько_сколько_обещано(self):
+        assert len(plan_attempts(60)) == ATTEMPTS
+
+    def test_поровну(self):
+        assert plan_attempts(60) == [30.0, 30.0]
+
+    def test_короткий_срок_не_дробится(self):
+        """Две попытки по пять секунд хуже одной десятисекундной: не успеет ни та, ни та."""
+        assert plan_attempts(10) == [10]
+
+    def test_граница(self):
+        предел = MIN_ATTEMPT * ATTEMPTS
+        assert len(plan_attempts(предел)) == ATTEMPTS
+        assert plan_attempts(предел - 1) == [предел - 1]
+
+    def test_одна_попытка_по_просьбе(self):
+        assert plan_attempts(60, attempts=1) == [60]
+
+    def test_три_попытки(self):
+        assert plan_attempts(90, attempts=3) == [30.0, 30.0, 30.0]
 
 
 class TestПодсказкаВхода:

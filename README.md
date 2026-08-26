@@ -94,6 +94,12 @@ curl "https://api.auth.2gis.com/2.1/users/me?access_token=$(2gis-token get)"
 | `--headed` | shows the browser window — for when something is off |
 | `--profile NAME` | use a named session — see [Several accounts](#several-accounts) |
 
+If no token turns up, the page is reloaded once and watched again: the app
+does not always arrive on the first try. The two attempts **share** the
+`--timeout` budget rather than doubling it, so the flag still means what it
+says. Below 30 seconds there is only one attempt — two short ones are worse
+than a single longer one.
+
 ### `check` — is the token still good?
 
 ```bash
@@ -257,7 +263,8 @@ python -m pytest -m browser
 ```
 
 The suite is verified by mutation: break a rule on purpose, and a test must go
-red. All twenty-four mutations tried so far were caught.
+red. All twenty-six mutations tried so far were caught, plus the browser suite:
+remove the second attempt and its test goes red.
 
 ## License
 
