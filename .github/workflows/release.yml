@@ -80,6 +80,32 @@ jobs:
             ./dist/2gis-token --version
           fi
 
+      # Главная проверка сборки — делает то же, что человек: ставит браузер и
+      # ловит токен. Без неё первые три выпуска ушли со сборками, которые
+      # честно скачивали браузер и тут же сообщали, что браузера нет: в сборке
+      # Playwright искал его не там, куда его клал install-browser. --version
+      # этого не видит, а человек упирается в первую же команду.
+      #
+      # Системные библиотеки Chromium на Linux ставит pip-овый Playwright:
+      # в самой сборке такой команды нет, а на машинах людей они обычно есть.
+      - name: Системные библиотеки для Chromium
+        if: runner.os == 'Linux'
+        run: sudo "$(which python)" -m playwright install-deps chromium
+
+      - name: Сборка находит свой браузер и ловит токен
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN=./dist/2gis-token.exe; else BIN=./dist/2gis-token; fi
+          "$BIN" install-browser
+          echo '{"cookies": [], "origins": []}' > smoke-state.json
+          PAGE=$(python -c "import pathlib; print(pathlib.Path('tests/pages/fake_2gis.html').resolve().as_uri())")
+          TOKEN=$("$BIN" get --state smoke-state.json --url "$PAGE" --timeout 40)
+          if [ "$TOKEN" != "0123456789abcdef0123456789abcdef01234567" ]; then
+            echo "::error::сборка не поймала токен на подставной странице: '$TOKEN'"
+            exit 1
+          fi
+          echo "сборка нашла браузер и поймала токен"
+
       # Права на исполнение через артефакты GitHub не переживают, поэтому
       # unix-сборки упаковываем в tar.gz, а .exe уходит как есть.
       - name: Упаковать

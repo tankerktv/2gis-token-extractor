@@ -34,6 +34,14 @@ Playwright по умолчанию представляется как ``Headles
 удваивается — ``--timeout`` остаётся полным бюджетом, на который можно
 рассчитывать в расписании.
 
+**Однофайловая сборка должна сама сказать Playwright, где браузер.** Сам
+Playwright в сборке PyInstaller ищет браузер внутри программы — а однофайловая
+сборка распаковывает себя во временную папку, которую стирает при выходе. При
+этом ``install-browser`` кладёт браузер в обычный кэш пользователя. Места не
+совпадали никогда: первые три выпуска честно скачивали браузер и тут же
+сообщали, что браузера нет. CI этого не видел, потому что проверял у сборки
+только ``--version``.
+
 **Куки обновляются при визите, и не сохранить их — значит потерять сессию.**
 Раньше состояние записывалось только при удаче. Один заход без сохранения — и
 на диске оставались прежние куки, а вход приходилось повторять, хотя он был
@@ -50,6 +58,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import platform
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -142,7 +154,61 @@ class Traffic:
         self.requests = 0
 
 
+#: Переменная, по которой Playwright узнаёт, где лежат браузеры.
+ENV_BROWSERS_PATH = "PLAYWRIGHT_BROWSERS_PATH"
+
+
+def default_browsers_path(system: str, env: Mapping[str, str], home: Path) -> Path:
+    """Куда Playwright кладёт браузеры, если его не просили об ином.
+
+    Правила повторяют правила самого Playwright — туда же их кладёт
+    ``playwright install``, а значит и наш ``install-browser``.
+    """
+    if system == "Windows":
+        base = env.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+    elif system == "Darwin":
+        base = str(home / "Library" / "Caches")
+    else:
+        base = env.get("XDG_CACHE_HOME") or str(home / ".cache")
+    return Path(base) / "ms-playwright"
+
+
+def browsers_path_to_pin(
+    *,
+    frozen: bool,
+    env: Mapping[str, str],
+    system: str,
+    home: Path,
+) -> str | None:
+    """Что записать в ``PLAYWRIGHT_BROWSERS_PATH``; ``None`` — ничего не трогать.
+
+    Трогаем только сборку: у программы, поставленной через pip, Playwright и
+    так ищет в кэше. И только если человек не задал путь сам — даже если задал
+    ``0``: значит, он знает, что делает.
+    """
+    if not frozen or env.get(ENV_BROWSERS_PATH):
+        return None
+    return str(default_browsers_path(system, env, home))
+
+
+def pin_browsers_path() -> None:
+    """Говорит Playwright, где браузеры, пока он не решил за нас.
+
+    Вызывается до любой работы с Playwright — и при захвате, и при установке
+    браузера, — чтобы оба смотрели в одно место.
+    """
+    value = browsers_path_to_pin(
+        frozen=bool(getattr(sys, "frozen", False)),
+        env=os.environ,
+        system=platform.system(),
+        home=Path.home(),
+    )
+    if value:
+        os.environ[ENV_BROWSERS_PATH] = value
+
+
 def _import_playwright():
+    pin_browsers_path()
     try:
         from playwright.async_api import async_playwright
     except ImportError as error:  # pragma: no cover — зависит от окружения
@@ -426,8 +492,8 @@ def install_browser() -> int:
     возможности выполнить ``playwright install`` привычным способом.
     """
     import subprocess
-    import sys
 
+    pin_browsers_path()
     if getattr(sys, "frozen", False):  # однофайловая сборка PyInstaller
         from playwright.__main__ import main as playwright_main
 
