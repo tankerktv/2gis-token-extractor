@@ -48,8 +48,13 @@ pipx install git+https://github.com/tankerktv/2gis-token-extractor.git
 ровно ту же команду `2gis-token`.
 
 **Без Python:** возьми однофайловую сборку под свою систему в
-[релизах](https://github.com/tankerktv/2gis-token-extractor/releases), положи
-куда-нибудь в `PATH` и один раз выполни `2gis-token install-browser`.
+[релизах](https://github.com/tankerktv/2gis-token-extractor/releases),
+переименуй в `2gis-token` (на Windows — `2gis-token.exe`), положи куда-нибудь
+в `PATH` и один раз выполни `2gis-token install-browser`.
+
+Это консольная программа: её запускают из терминала, с командой. Двойной клик
+на Windows только покажет справку и подождёт Enter — без команды делать ей
+нечего.
 
 ## Как пользоваться
 

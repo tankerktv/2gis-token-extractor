@@ -24,7 +24,7 @@ import asyncio
 import json
 import logging
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from . import __version__, auth_api, browser
 from .errors import EXIT_AUTH, EXIT_NETWORK, EXIT_OK, EXIT_TOKEN, TokenExtractorError
@@ -366,8 +366,81 @@ COMMANDS = {
 # --- точка входа ------------------------------------------------------------
 
 
+#: Код возврата для вызова без команды — тот же, что argparse отдаёт за любую
+#: другую ошибку в аргументах.
+EXIT_USAGE = 2
+
+
+def window_closes_on_exit(*, frozen: bool, platform: str, interactive: bool) -> bool:
+    """Закроется ли окно консоли сразу, как только программа выйдет.
+
+    Так бывает, когда однофайловую сборку на Windows запускают двойным кликом:
+    Проводник открывает консоль ради программы и закрывает её вместе с ней.
+    Человек видит, что «ничего не запустилось», хотя программа отработала и
+    даже что-то сказала — только прочитать это было некогда.
+
+    Признак берётся грубый: сборка, Windows, живой терминал. Отличить клик от
+    запуска из ``cmd`` без аргументов можно только перебором процессов
+    консоли, а цена ошибки ничтожна — лишнее «нажми Enter» тому, кто и так
+    запустил программу без команды.
+    """
+    return frozen and platform == "win32" and interactive
+
+
+def _interactive() -> bool:
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError):  # stdin закрыт или подменён
+        return False
+
+
+def double_click_hint(executable: str) -> str:
+    """Подсказка тому, кто кликнул по программе дважды.
+
+    Имя файла берётся настоящее: сборка называется
+    ``2gis-token-windows-x86_64.exe``, и совет набрать ``2gis-token`` не сработал
+    бы, пока файл не переименован.
+
+    Путь разбирается по правилам Windows явно: подсказка нужна только там, а
+    обычный ``Path`` на Linux не считает обратный слэш разделителем, и тесты в
+    CI получили бы в «имени файла» весь путь целиком.
+    """
+    name = PureWindowsPath(executable).name
+    return (
+        "\n"
+        "This is a command-line program: double-clicking it only shows this help.\n"
+        "Open a terminal in this folder and run it with a command, for example:\n"
+        f"  {name} install-browser\n"
+        f"  {name} login\n"
+        f"  {name} get\n"
+        "\n"
+        "Press Enter to close this window."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    parser = build_parser()
+
+    if not argv:
+        # Без команды argparse напечатал бы две строки ошибки и вышел. Из
+        # терминала это терпимо, а при двойном клике окно закрывается раньше,
+        # чем их успеваешь прочесть. Поэтому — полная справка, а если окно
+        # вот-вот исчезнет, ещё и подсказка с ожиданием Enter.
+        out(parser.format_help().rstrip())
+        if window_closes_on_exit(
+            frozen=bool(getattr(sys, "frozen", False)),
+            platform=sys.platform,
+            interactive=_interactive(),
+        ):
+            err(double_click_hint(sys.executable))
+            try:
+                input()
+            except EOFError:
+                pass
+        return EXIT_USAGE
+
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO if getattr(args, "verbose", False) else logging.WARNING,

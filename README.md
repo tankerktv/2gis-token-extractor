@@ -49,8 +49,13 @@ from this repository anyway. Installing straight from git needs `git` on your
 machine and gives you exactly the same `2gis-token` command.
 
 **Without Python:** grab a single-file build for your system from
-[Releases](https://github.com/tankerktv/2gis-token-extractor/releases), put it
-somewhere on your `PATH`, and run `2gis-token install-browser` once.
+[Releases](https://github.com/tankerktv/2gis-token-extractor/releases), rename
+it to `2gis-token` (`2gis-token.exe` on Windows), put it somewhere on your
+`PATH`, and run `2gis-token install-browser` once.
+
+It is a command-line program: run it from a terminal, with a command.
+Double-clicking it on Windows only shows the help and waits for Enter — without
+a command there is nothing for it to do.
 
 ## Use
 

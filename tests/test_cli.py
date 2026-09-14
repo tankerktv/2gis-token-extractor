@@ -175,9 +175,44 @@ class TestLogin:
 
 
 class TestРазборАргументов:
-    def test_без_команды(self):
+    def test_без_команды_показывает_справку(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: False)
+        assert cli.main([]) == cli.EXIT_USAGE
+        captured = capsys.readouterr()
+        assert "COMMAND" in captured.out
+        assert "examples:" in captured.out
+
+    def test_без_команды_из_терминала_не_ждёт(self, monkeypatch, capsys):
+        """Обычный запуск без аргументов не должен повиснуть в ожидании Enter."""
+
+        def нельзя(*args):  # pragma: no cover — не должен вызваться
+            raise AssertionError("ждать Enter тут некого")
+
+        monkeypatch.setattr("builtins.input", нельзя)
+        monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: False)
+        assert cli.main([]) == cli.EXIT_USAGE
+        assert "Press Enter" not in capsys.readouterr().err
+
+    def test_двойной_клик_ждёт_enter(self, monkeypatch, capsys):
+        """Иначе окно закроется раньше, чем человек прочтёт хоть строчку."""
+        нажатия = []
+        monkeypatch.setattr("builtins.input", lambda *args: нажатия.append(1) or "")
+        monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: True)
+        assert cli.main([]) == cli.EXIT_USAGE
+        assert нажатия == [1]
+        assert "Press Enter" in capsys.readouterr().err
+
+    def test_закрытый_ввод_не_роняет_программу(self, monkeypatch):
+        def конец_ввода(*args):
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", конец_ввода)
+        monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: True)
+        assert cli.main([]) == cli.EXIT_USAGE
+
+    def test_неизвестная_команда_по_прежнему_ошибка(self):
         with pytest.raises(SystemExit):
-            cli.main([])
+            cli.main(["нет-такой-команды"])
 
     def test_версия(self, capsys):
         with pytest.raises(SystemExit) as exit_info:
@@ -225,3 +260,36 @@ class TestПрофили:
         assert cli.main(["get", "--profile", "несуществующий"]) == EXIT_AUTH
         ошибка = capsys.readouterr().err
         assert "login --profile несуществующий" in ошибка
+
+
+class TestДвойнойКлик:
+    """Однофайловую сборку на Windows запускают кликом — и окно тут же закрывается."""
+
+    def test_клик_по_сборке_на_windows(self):
+        assert cli.window_closes_on_exit(frozen=True, platform="win32", interactive=True)
+
+    @pytest.mark.parametrize(
+        ("frozen", "platform", "interactive"),
+        [
+            (False, "win32", True),  # запуск из исходников или через pipx
+            (True, "linux", True),  # консольное на Linux кликом не запускают
+            (True, "darwin", True),
+            (True, "win32", False),  # планировщик или конвейер: ждать Enter некого
+        ],
+    )
+    def test_иначе_не_ждём(self, frozen, platform, interactive):
+        assert not cli.window_closes_on_exit(
+            frozen=frozen, platform=platform, interactive=interactive
+        )
+
+    def test_подсказка_называет_файл_как_он_есть(self):
+        """Совет набрать 2gis-token не сработает, пока файл не переименован."""
+        hint = cli.double_click_hint(r"C:\Users\Кто-то\Downloads\2gis-token-windows-x86_64.exe")
+        assert "2gis-token-windows-x86_64.exe login" in hint
+        assert "Downloads" not in hint
+
+    def test_подсказка_говорит_что_делать_дальше(self):
+        hint = cli.double_click_hint(r"C:\2gis-token.exe")
+        for command in ("install-browser", "login", "get"):
+            assert f"2gis-token.exe {command}" in hint
+        assert "Press Enter" in hint
