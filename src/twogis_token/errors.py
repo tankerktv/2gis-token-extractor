@@ -58,6 +58,22 @@ class BrowserMissing(TokenExtractorError):
     exit_code = EXIT_ENVIRONMENT
 
 
+class PageNotLoaded(SessionExpired):
+    """Страница 2ГИС не ожила, и до токена дело не дошло.
+
+    Наследник ``SessionExpired`` нарочно: для скриптов код возврата прежний, 2,
+    и менять договорённость ради окна незачем. А окну разница нужна: вход тут
+    ни при чём, и звать человека логиниться заново — значит тратить его SMS
+    впустую.
+    """
+
+
+class WindowUnavailable(TokenExtractorError):
+    """Окно открыть нельзя: нет tkinter или нет экрана (например, по SSH)."""
+
+    exit_code = EXIT_ENVIRONMENT
+
+
 class SessionBusy(TokenExtractorError):
     """С этой сессией прямо сейчас работает другой заход.
 

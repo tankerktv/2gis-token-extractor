@@ -55,6 +55,7 @@ from pathlib import Path
 
 from .errors import (
     BrowserMissing,
+    PageNotLoaded,
     PlaywrightMissing,
     SessionExpired,
     SessionMissing,
@@ -268,6 +269,19 @@ def diagnose(requests: int, timeout: float, profile: str | None = None) -> str:
     )
 
 
+def expired_error(requests: int, timeout: float, profile: str | None = None) -> SessionExpired:
+    """Какую ошибку поднять, когда токен так и не появился.
+
+    Текст для консоли одинаково подробный в обоих случаях. Тип же разный: окно
+    не читает текст, а смотрит на тип, и при незагрузившейся странице не
+    должно звать человека входить заново.
+    """
+    text = diagnose(requests, timeout, profile)
+    if requests < BOOT_REQUESTS:
+        return PageNotLoaded(text)
+    return SessionExpired(text)
+
+
 async def _wait_for_token(page, collector: TokenCollector, timeout: float) -> Capture | None:
     """Ждёт токен до истечения срока, попутно заглядывая в перехватчик на странице."""
     loop = asyncio.get_running_loop()
@@ -359,7 +373,7 @@ async def capture_token(
                     log.info("token captured from %s", capture.source)
                     return capture
 
-            raise SessionExpired(diagnose(traffic.requests, timeout, profile))
+            raise expired_error(traffic.requests, timeout, profile)
         finally:
             await _save_state(context, state_path)
             await context.close()
