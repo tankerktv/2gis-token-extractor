@@ -10,9 +10,16 @@ import json
 
 import pytest
 
-from twogis_token import auth_api, browser, cli
+from twogis_token import auth_api, browser, cli, gui
 from twogis_token.auth_api import CheckResult
-from twogis_token.errors import EXIT_AUTH, EXIT_NETWORK, EXIT_OK, EXIT_TOKEN
+from twogis_token.errors import (
+    EXIT_AUTH,
+    EXIT_ENVIRONMENT,
+    EXIT_NETWORK,
+    EXIT_OK,
+    EXIT_TOKEN,
+    WindowUnavailable,
+)
 from twogis_token.state import ENV_STATE
 
 TOKEN = "0123456789abcdef0123456789abcdef01234567"
@@ -193,22 +200,86 @@ class TestРазборАргументов:
         assert cli.main([]) == cli.EXIT_USAGE
         assert "Press Enter" not in capsys.readouterr().err
 
-    def test_двойной_клик_ждёт_enter(self, monkeypatch, capsys):
-        """Иначе окно закроется раньше, чем человек прочтёт хоть строчку."""
+    def test_двойной_клик_открывает_окно(self, monkeypatch, capsys):
+        """Кликом запускают те, кому терминал барьер, — им окно, а не справка."""
+        запуски = []
+
+        def нельзя(*args):  # pragma: no cover — не должен вызваться
+            raise AssertionError("окно открылось — ждать Enter незачем")
+
+        monkeypatch.setattr(cli, "start_window_detached", запуски.append)
+        monkeypatch.setattr("builtins.input", нельзя)
+        monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: True)
+
+        assert cli.main([]) == EXIT_OK
+        assert len(запуски) == 1
+        assert capsys.readouterr().out == ""
+
+    def test_без_окна_клик_даёт_подсказку_и_ждёт_enter(self, monkeypatch, capsys):
+        """Окна не будет — консоль всё равно не должна закрыться молча."""
         нажатия = []
+
+        def окна_нет(executable):
+            raise WindowUnavailable("no display")
+
+        monkeypatch.setattr(cli, "start_window_detached", окна_нет)
         monkeypatch.setattr("builtins.input", lambda *args: нажатия.append(1) or "")
         monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: True)
+
         assert cli.main([]) == cli.EXIT_USAGE
         assert нажатия == [1]
-        assert "Press Enter" in capsys.readouterr().err
+        ошибки = capsys.readouterr().err
+        assert "no display" in ошибки
+        assert "Press Enter" in ошибки
 
-    def test_закрытый_ввод_не_роняет_программу(self, monkeypatch):
+    def test_без_окна_и_с_закрытым_вводом_не_падает(self, monkeypatch):
+        def окна_нет(executable):
+            raise WindowUnavailable("no display")
+
         def конец_ввода(*args):
             raise EOFError
 
+        monkeypatch.setattr(cli, "start_window_detached", окна_нет)
         monkeypatch.setattr("builtins.input", конец_ввода)
         monkeypatch.setattr(cli, "window_closes_on_exit", lambda **kw: True)
         assert cli.main([]) == cli.EXIT_USAGE
+
+    def test_перезапуск_идёт_с_командой(self):
+        """Без команды копия снова сочла бы себя запущенной кликом — и так без конца."""
+        команда = cli.window_command(r"C:\Downloads\2gis-token.exe")
+        assert команда == [r"C:\Downloads\2gis-token.exe", "gui"]
+
+
+class TestОкружениеПерезапуска:
+    """Сборка сообщает потомкам, где лежит её распакованная копия.
+
+    Потомок с такой переменной не распаковывается сам, а берёт ту же папку —
+    и когда первая копия выходит, она эту папку стирает. Поймано на живой
+    сборке: окно открылось, а на кнопку ответило «в этой копии нет Playwright»,
+    хотя та же сборка из консоли работала.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "_PYI_APPLICATION_HOME_DIR",
+            "_PYI_ARCHIVE_FILE",
+            "_PYI_PARENT_PROCESS_LEVEL",
+            "_MEIPASS2",
+        ],
+    )
+    def test_служебные_переменные_сборки_не_передаются(self, name):
+        assert name not in cli.child_environment({name: "C:\\Temp\\_MEI123", "PATH": "/usr/bin"})
+
+    def test_регистр_не_спасает(self):
+        assert cli.child_environment({"_pyi_archive_file": "x"}) == {}
+
+    def test_всё_остальное_передаётся(self):
+        окружение = {"PATH": "/usr/bin", "TWOGIS_TOKEN_PROFILE": "работа", "_PYI_X": "y"}
+        assert cli.child_environment(окружение) == {
+            "PATH": "/usr/bin",
+            "TWOGIS_TOKEN_PROFILE": "работа",
+        }
 
     def test_неизвестная_команда_по_прежнему_ошибка(self):
         with pytest.raises(SystemExit):
@@ -260,6 +331,52 @@ class TestПрофили:
         assert cli.main(["get", "--profile", "несуществующий"]) == EXIT_AUTH
         ошибка = capsys.readouterr().err
         assert "login --profile несуществующий" in ошибка
+
+
+class TestКомандаОкна:
+    @pytest.fixture
+    def окно(self, monkeypatch):
+        вызовы = []
+
+        def run(**options):
+            вызовы.append(options)
+            return 0
+
+        monkeypatch.setattr(gui, "run", run)
+        return вызовы
+
+    def test_открывает_окно(self, окно):
+        assert cli.main(["gui"]) == EXIT_OK
+        assert len(окно) == 1
+        assert окно[0]["language"] is None  # язык системы решает само окно
+
+    def test_язык_по_просьбе(self, окно):
+        assert cli.main(["gui", "--lang", "ru"]) == EXIT_OK
+        assert окно[0]["language"] == "ru"
+
+    def test_незнакомый_язык_отвергается(self, окно):
+        with pytest.raises(SystemExit):
+            cli.main(["gui", "--lang", "de"])
+        assert окно == []
+
+    def test_профиль_доезжает_до_окна(self, окно):
+        assert cli.main(["gui", "--profile", "работа"]) == EXIT_OK
+        путь = str(окно[0]["state_path"])
+        assert "profiles" in путь
+        assert "работа" in путь
+
+    def test_из_терминала_консоль_не_прячется(self, окно):
+        """Иначе спрятался бы терминал самого человека."""
+        cli.main(["gui"])
+        assert "hide_console" not in окно[0]
+
+    def test_нет_экрана_внятная_ошибка(self, monkeypatch, capsys):
+        def окна_нет(**options):
+            raise WindowUnavailable("cannot open a window here")
+
+        monkeypatch.setattr(gui, "run", окна_нет)
+        assert cli.main(["gui"]) == EXIT_ENVIRONMENT
+        assert "cannot open a window" in capsys.readouterr().err
 
 
 class TestДвойнойКлик:

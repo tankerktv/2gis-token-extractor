@@ -23,11 +23,14 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path, PureWindowsPath
 
 from . import __version__, auth_api, browser
 from .errors import EXIT_AUTH, EXIT_NETWORK, EXIT_OK, EXIT_TOKEN, TokenExtractorError
+from .i18n import ENV_LANG, SUPPORTED
 from .state import (
     ENV_PROFILE,
     ENV_STATE,
@@ -47,6 +50,7 @@ examples:
   2gis-token check                    ask 2GIS whether the token still works
   2gis-token get --out token.txt      write it to a file instead of stdout
   2gis-token login --profile work     keep a second account separate
+  2gis-token gui                      the same, with buttons instead of commands
 
   export ZOND_TOKEN="$(2gis-token get)"
 
@@ -200,6 +204,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     profiles.add_argument("--json", action="store_true", help="machine-readable details")
 
+    gui = commands.add_parser(
+        "gui",
+        help="open a window instead of using the terminal",
+        description=(
+            "Opens a small window with buttons to sign in, get a token and copy it. "
+            "Double-clicking the single-file build on Windows opens it too. The "
+            "window speaks the system language; --lang picks one explicitly."
+        ),
+    )
+    _add_session(gui)
+    gui.add_argument(
+        "--lang",
+        choices=SUPPORTED,
+        help=f"window language (default: system language, ${ENV_LANG})",
+    )
+
     commands.add_parser(
         "install-browser",
         help="download the browser Playwright needs",
@@ -350,6 +370,17 @@ def cmd_profiles(args) -> int:
     return EXIT_OK
 
 
+def _open_window(**options) -> int:
+    """Открывает окно. Модуль окна грузится только здесь — консоли он не нужен."""
+    from . import gui
+
+    return gui.run(**options)
+
+
+def cmd_gui(args) -> int:
+    return _open_window(language=args.lang, state_path=_state_path(args))
+
+
 def cmd_install_browser(args) -> int:
     return browser.install_browser()
 
@@ -359,6 +390,7 @@ COMMANDS = {
     "get": cmd_get,
     "check": cmd_check,
     "profiles": cmd_profiles,
+    "gui": cmd_gui,
     "install-browser": cmd_install_browser,
 }
 
@@ -418,21 +450,85 @@ def double_click_hint(executable: str) -> str:
     )
 
 
+def window_command(executable: str) -> list[str]:
+    """Чем перезапустить себя окном.
+
+    Команда здесь обязательна: без неё перезапущенная копия снова сочла бы,
+    что её запустили кликом, и плодила бы себя без конца.
+    """
+    return [executable, "gui"]
+
+
+#: Приставки служебных переменных PyInstaller: ими сборка сообщает потомкам,
+#: где лежит её распакованная копия.
+PYINSTALLER_VARS = ("_PYI", "_MEI")
+
+
+def child_environment(env: Mapping[str, str]) -> dict[str, str]:
+    """Окружение для перезапущенной копии — без служебных переменных сборки.
+
+    Однофайловая сборка распаковывает себя во временную папку и сообщает её
+    адрес потомкам. Потомок с такой переменной не распаковывается сам, а берёт
+    ту же папку — а первая копия, выходя, эту папку стирает. У окна исчезают
+    файлы под ногами: уже загруженное работает, а первый же отложенный импорт
+    падает, и окно сообщает, что в этой копии нет Playwright.
+
+    Поймано ровно так: окно открылось, а на кнопку ответило отказом, хотя та же
+    сборка из консоли работала.
+    """
+    return {
+        name: value
+        for name, value in env.items()
+        if not name.upper().startswith(PYINSTALLER_VARS)
+    }
+
+
+def start_window_detached(executable: str) -> None:
+    """Запускает окно отдельным процессом без консоли и отвязывается от него.
+
+    Казалось бы, окно можно открыть и здесь. Но при двойном клике консоль
+    открывает не программа, а Проводник, и на Windows 11 владеет ею «Терминал».
+    Спрятать чужое окно нельзя — оно так и останется торчать за окном
+    программы. Поэтому программа запускает себя заново, уже без консоли, и
+    сразу выходит: «Терминал» закрывается вместе с ней, остаётся одно окно.
+    """
+    import subprocess
+
+    subprocess.Popen(
+        window_command(executable),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        env=child_environment(os.environ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser()
 
     if not argv:
-        # Без команды argparse напечатал бы две строки ошибки и вышел. Из
-        # терминала это терпимо, а при двойном клике окно закрывается раньше,
-        # чем их успеваешь прочесть. Поэтому — полная справка, а если окно
-        # вот-вот исчезнет, ещё и подсказка с ожиданием Enter.
-        out(parser.format_help().rstrip())
-        if window_closes_on_exit(
+        # Без команды argparse напечатал бы две строки ошибки и вышел, а при
+        # двойном клике Windows закрыла бы окно раньше, чем их успеваешь
+        # прочесть. Кликом запускают те, кому терминал барьер, — им окно. Из
+        # терминала — полная справка, как у любой консольной программы.
+        clicked = window_closes_on_exit(
             frozen=bool(getattr(sys, "frozen", False)),
             platform=sys.platform,
             interactive=_interactive(),
-        ):
+        )
+        if clicked:
+            try:
+                start_window_detached(sys.executable)
+                return EXIT_OK
+            except Exception as error:
+                # Окна не будет. Промолчать нельзя: консоль закроется, и человек
+                # снова увидит «ничего не запустилось». Остаётся подсказка.
+                err(f"{PROGRAM}: {error}")
+        out(parser.format_help().rstrip())
+        if clicked:
             err(double_click_hint(sys.executable))
             try:
                 input()
