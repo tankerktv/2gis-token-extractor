@@ -12,15 +12,24 @@
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
 from twogis_token.browser import (
     ATTEMPTS,
     BOOT_REQUESTS,
+    ENV_BROWSERS_PATH,
     GRACE,
     MIN_ATTEMPT,
+    browsers_path_to_pin,
     diagnose,
     enough,
     honest_user_agent,
     login_command,
+    pin_browsers_path,
     plan_attempts,
 )
 from twogis_token.tokens import Found
@@ -121,6 +130,63 @@ class TestДелениеСрока:
 
     def test_три_попытки(self):
         assert plan_attempts(90, attempts=3) == [30.0, 30.0, 30.0]
+
+
+HOME = Path("/дом/пользователь")
+
+
+class TestГдеБраузерВСборке:
+    """Первые три выпуска сборок не находили браузер, который сами же ставили.
+
+    Playwright в сборке PyInstaller ищет браузер внутри программы, во временной
+    папке распаковки, а install-browser кладёт его в кэш пользователя.
+    """
+
+    def test_сборка_смотрит_в_кэш_пользователя(self):
+        путь = browsers_path_to_pin(
+            frozen=True, env={"LOCALAPPDATA": "/local"}, system="Windows", home=HOME
+        )
+        assert путь == str(Path("/local") / "ms-playwright")
+
+    def test_windows_без_localappdata(self):
+        путь = browsers_path_to_pin(frozen=True, env={}, system="Windows", home=HOME)
+        assert путь == str(HOME / "AppData" / "Local" / "ms-playwright")
+
+    def test_macos(self):
+        путь = browsers_path_to_pin(frozen=True, env={}, system="Darwin", home=HOME)
+        assert путь == str(HOME / "Library" / "Caches" / "ms-playwright")
+
+    def test_linux_по_умолчанию(self):
+        путь = browsers_path_to_pin(frozen=True, env={}, system="Linux", home=HOME)
+        assert путь == str(HOME / ".cache" / "ms-playwright")
+
+    def test_linux_уважает_xdg(self):
+        путь = browsers_path_to_pin(
+            frozen=True, env={"XDG_CACHE_HOME": "/кэш"}, system="Linux", home=HOME
+        )
+        assert путь == str(Path("/кэш") / "ms-playwright")
+
+    def test_не_сборку_не_трогаем(self):
+        """Поставленной через pip программе Playwright и так ищет в кэше."""
+        assert browsers_path_to_pin(frozen=False, env={}, system="Windows", home=HOME) is None
+
+    @pytest.mark.parametrize("своё", ["/мои/браузеры", "0"])
+    def test_путь_заданный_человеком_не_трогаем(self, своё):
+        env = {ENV_BROWSERS_PATH: своё}
+        assert browsers_path_to_pin(frozen=True, env=env, system="Windows", home=HOME) is None
+
+    def test_в_сборке_путь_выставляется_до_работы(self, monkeypatch):
+        """Выставить нужно раньше Playwright: он кладёт свой «0» через setdefault."""
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.delenv(ENV_BROWSERS_PATH, raising=False)
+        pin_browsers_path()
+        assert os.environ[ENV_BROWSERS_PATH].endswith("ms-playwright")
+
+    def test_без_сборки_окружение_не_меняется(self, monkeypatch):
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        monkeypatch.delenv(ENV_BROWSERS_PATH, raising=False)
+        pin_browsers_path()
+        assert ENV_BROWSERS_PATH not in os.environ
 
 
 class TestПодсказкаВхода:
