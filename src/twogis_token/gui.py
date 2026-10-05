@@ -328,34 +328,7 @@ def enable_crisp_text() -> None:
         pass
 
 
-def hide_own_console() -> None:
-    """Прячет окно консоли, открытое ради этой программы.
-
-    Вызывать можно **только при запуске кликом**: тогда консоль своя. При
-    запуске из терминала это спрятало бы терминал самого человека.
-
-    На Windows 11 с «Терминалом» по умолчанию окно консоли может и не
-    спрятаться — оно принадлежит Терминалу, а не нам. Тогда оно просто
-    останется за окном программы; мешать это не мешает.
-    """
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-
-        console = ctypes.windll.kernel32.GetConsoleWindow()
-        if console:
-            ctypes.windll.user32.ShowWindow(console, 0)  # SW_HIDE
-    except (AttributeError, OSError):  # pragma: no cover — зависит от системы
-        pass
-
-
-def run(
-    language: str | None = None,
-    state_path: Path | None = None,
-    *,
-    hide_console: bool = False,
-) -> int:
+def run(language: str | None = None, state_path: Path | None = None) -> int:
     """Открывает окно и ждёт, пока его закроют."""
     try:
         import tkinter as tk
@@ -377,9 +350,5 @@ def run(
         language=detect_language(language),
         state_path=state_path or resolve_state_path(),
     )
-    # Консоль прячется только после того, как окно действительно создано:
-    # иначе при сбое человек остался бы и без окна, и без сообщения об ошибке.
-    if hide_console:
-        hide_own_console()
     root.mainloop()
     return 0

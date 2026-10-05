@@ -23,7 +23,9 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path, PureWindowsPath
 
 from . import __version__, auth_api, browser
@@ -448,6 +450,61 @@ def double_click_hint(executable: str) -> str:
     )
 
 
+def window_command(executable: str) -> list[str]:
+    """Чем перезапустить себя окном.
+
+    Команда здесь обязательна: без неё перезапущенная копия снова сочла бы,
+    что её запустили кликом, и плодила бы себя без конца.
+    """
+    return [executable, "gui"]
+
+
+#: Приставки служебных переменных PyInstaller: ими сборка сообщает потомкам,
+#: где лежит её распакованная копия.
+PYINSTALLER_VARS = ("_PYI", "_MEI")
+
+
+def child_environment(env: Mapping[str, str]) -> dict[str, str]:
+    """Окружение для перезапущенной копии — без служебных переменных сборки.
+
+    Однофайловая сборка распаковывает себя во временную папку и сообщает её
+    адрес потомкам. Потомок с такой переменной не распаковывается сам, а берёт
+    ту же папку — а первая копия, выходя, эту папку стирает. У окна исчезают
+    файлы под ногами: уже загруженное работает, а первый же отложенный импорт
+    падает, и окно сообщает, что в этой копии нет Playwright.
+
+    Поймано ровно так: окно открылось, а на кнопку ответило отказом, хотя та же
+    сборка из консоли работала.
+    """
+    return {
+        name: value
+        for name, value in env.items()
+        if not name.upper().startswith(PYINSTALLER_VARS)
+    }
+
+
+def start_window_detached(executable: str) -> None:
+    """Запускает окно отдельным процессом без консоли и отвязывается от него.
+
+    Казалось бы, окно можно открыть и здесь. Но при двойном клике консоль
+    открывает не программа, а Проводник, и на Windows 11 владеет ею «Терминал».
+    Спрятать чужое окно нельзя — оно так и останется торчать за окном
+    программы. Поэтому программа запускает себя заново, уже без консоли, и
+    сразу выходит: «Терминал» закрывается вместе с ней, остаётся одно окно.
+    """
+    import subprocess
+
+    subprocess.Popen(
+        window_command(executable),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        env=child_environment(os.environ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser()
@@ -464,7 +521,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if clicked:
             try:
-                return _open_window(hide_console=True)
+                start_window_detached(sys.executable)
+                return EXIT_OK
             except Exception as error:
                 # Окна не будет. Промолчать нельзя: консоль закроется, и человек
                 # снова увидит «ничего не запустилось». Остаётся подсказка.

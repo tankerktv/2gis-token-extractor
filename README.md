@@ -123,6 +123,24 @@ outcomes apart, because they are fixed differently:
 | 2GIS returned an error of its own | 1 | wait; the session is fine |
 | no network | 4 | check your connection |
 
+## A window instead of commands
+
+```bash
+2gis-token gui
+```
+
+Opens a small window: sign in, get a token, copy it. Double-clicking the
+single-file build on Windows opens the same window — that is what a
+double-click is for.
+
+The window speaks the system language: Russian on a Russian Windows, English
+otherwise. On Windows it follows the **display** language, not the regional
+format — so a Russian region with an English Windows still gets English.
+`--lang ru`, `--lang en` or `TWOGIS_TOKEN_LANG` picks one explicitly.
+
+The token stays hidden until you press Show, and reaches the clipboard only
+when you press Copy. Nothing is saved: copy it before you close the window.
+
 ## Exit codes
 
 Meant for scripts:
